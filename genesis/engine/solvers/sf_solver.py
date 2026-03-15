@@ -269,7 +269,8 @@ class SFSolver(Solver):
         self.reset_swap()
 
         self.subtract_gradient()
-        self.t += self.dt
+        # Use cached _dt attribute directly instead of property chain
+        self.t += self._dt
 
     def substep_post_coupling(self, f):
         return

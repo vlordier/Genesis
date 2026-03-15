@@ -332,14 +332,17 @@ class Simulator(RBC):
             solver.process_input_grad()
 
     def substep(self, f):
-        self._coupler.preprocess(f)
+        # Cache coupler ref locally to avoid repeated self._coupler lookups per substep
+        coupler = self._coupler
+        coupler.preprocess(f)
         self.substep_pre_coupling(f)
-        self._coupler.couple(f)
+        coupler.couple(f)
         self.substep_post_coupling(f)
 
     def sub_step_grad(self, f):
+        coupler = self._coupler
         self.substep_post_coupling_grad(f)
-        self._coupler.couple_grad(f)
+        coupler.couple_grad(f)
         self.substep_pre_coupling_grad(f)
 
     # -------------- pre coupling --------------
@@ -374,9 +377,10 @@ class Simulator(RBC):
         """
 
         # simulator-level states
-        if self.cur_step_global in self._queried_states:
+        cur_step = self.cur_step_global
+        if cur_step in self._queried_states:
             # one step could have multiple states
-            for state in self._queried_states[self.cur_step_global]:
+            for state in self._queried_states[cur_step]:
                 self.add_grad_from_state(state)
 
         # each solver will have their own entities, each of which stores a set of _queried_states
@@ -388,7 +392,8 @@ class Simulator(RBC):
         This function refreshes the gpu memory (copy the last frame to the first frame in the local memory), and then saves the checkpoint.
         This function is called every `substeps_local` steps, which means it's called only once per step when `requires_grad` is True.
         """
-        ckpt_start_substep = self._cur_substep_global - self._substeps_local
+        _substeps_local = self._substeps_local
+        ckpt_start_substep = self._cur_substep_global - _substeps_local
         ckpt_name = str(ckpt_start_substep)
 
         for solver in self._active_solvers:
@@ -400,7 +405,8 @@ class Simulator(RBC):
             )
 
     def load_ckpt(self):
-        ckpt_start_substep = self._cur_substep_global - self._substeps_local
+        _substeps_local = self._substeps_local
+        ckpt_start_substep = self._cur_substep_global - _substeps_local
         ckpt_name = str(ckpt_start_substep)
 
         for solver in self._active_solvers:

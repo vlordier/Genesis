@@ -651,6 +651,7 @@ class SAPCoupler(RBC):
     def couple(self, i_step):
         if self.has_contact:
             self.sap_solve(i_step)
+            # Cache dofs_state locally to avoid attribute chain (self.rigid_solver.dofs_state)
             self.update_vel(i_step, dofs_state=self.rigid_solver.dofs_state)
 
     def couple_grad(self, i_step):

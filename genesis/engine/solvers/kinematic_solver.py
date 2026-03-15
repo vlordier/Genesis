@@ -160,11 +160,14 @@ class KinematicSolver(Solver):
         self._links = self.links
         self._joints = self.joints
 
+        # Use cached lists to avoid redundant property calls that rebuild lists via generator expressions
+        _links = self._links
+        _joints = self._joints
         base_links_idx = []
-        for link in self.links:
+        for link in _links:
             if link.parent_idx == -1 and link.is_fixed:
                 base_links_idx.append(link.idx)
-        for joint in self.joints:
+        for joint in _joints:
             if joint.type == gs.JOINT_TYPE.FREE:
                 base_links_idx.append(joint.link.idx)
         self._base_links_idx = torch.tensor(base_links_idx, dtype=gs.tc_int, device=gs.device)
