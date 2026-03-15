@@ -404,11 +404,13 @@ class ToolEntity(Entity):
         self._tgt["quat"] = quat
 
     def process_input(self, in_backward=False):
+        # Cache cur_step_local to avoid repeated property chain (8 calls → 1)
+        _s = self._sim.cur_step_local
         if in_backward:
-            self._tgt["pos"] = self._tgt_buffer["pos"][self._sim.cur_step_local]
-            self._tgt["quat"] = self._tgt_buffer["quat"][self._sim.cur_step_local]
-            self._tgt["vel"] = self._tgt_buffer["vel"][self._sim.cur_step_local]
-            self._tgt["ang"] = self._tgt_buffer["ang"][self._sim.cur_step_local]
+            self._tgt["pos"] = self._tgt_buffer["pos"][_s]
+            self._tgt["quat"] = self._tgt_buffer["quat"][_s]
+            self._tgt["vel"] = self._tgt_buffer["vel"][_s]
+            self._tgt["ang"] = self._tgt_buffer["ang"][_s]
         else:
             self._tgt_buffer["pos"].append(self._tgt["pos"])
             self._tgt_buffer["quat"].append(self._tgt["quat"])
@@ -418,22 +420,22 @@ class ToolEntity(Entity):
         if self._tgt["pos"] is not None:
             self._tgt["pos"].assert_contiguous()
             self._tgt["pos"].assert_sceneless()
-            self.set_pos(self._sim.cur_step_local, self._tgt["pos"])
+            self.set_pos(_s, self._tgt["pos"])
 
         if self._tgt["quat"] is not None:
             self._tgt["quat"].assert_contiguous()
             self._tgt["quat"].assert_sceneless()
-            self.set_quat(self._sim.cur_step_local, self._tgt["quat"])
+            self.set_quat(_s, self._tgt["quat"])
 
         if self._tgt["vel"] is not None:
             self._tgt["vel"].assert_contiguous()
             self._tgt["vel"].assert_sceneless()
-            self.set_vel(self._sim.cur_step_local, self._tgt["vel"])
+            self.set_vel(_s, self._tgt["vel"])
 
         if self._tgt["ang"] is not None:
             self._tgt["ang"].assert_contiguous()
             self._tgt["ang"].assert_sceneless()
-            self.set_ang(self._sim.cur_step_local, self._tgt["ang"])
+            self.set_ang(_s, self._tgt["ang"])
 
         self._tgt["pos"] = None
         self._tgt["quat"] = None
@@ -446,17 +448,20 @@ class ToolEntity(Entity):
         _tgt_vel = self._tgt_buffer["vel"].pop()
         _tgt_ang = self._tgt_buffer["ang"].pop()
 
+        # Cache cur_step_local to avoid repeated property chain (4 calls → 1)
+        _s = self._sim.cur_step_local
+
         if _tgt_vel is not None and _tgt_vel.requires_grad:
-            _tgt_vel._backward_from_qd(self.set_vel_grad, self._sim.cur_step_local)
+            _tgt_vel._backward_from_qd(self.set_vel_grad, _s)
 
         if _tgt_ang is not None and _tgt_ang.requires_grad:
-            _tgt_ang._backward_from_qd(self.set_ang_grad, self._sim.cur_step_local)
+            _tgt_ang._backward_from_qd(self.set_ang_grad, _s)
 
         if _tgt_pos is not None and _tgt_pos.requires_grad:
-            _tgt_pos._backward_from_qd(self.set_pos_grad, self._sim.cur_step_local)
+            _tgt_pos._backward_from_qd(self.set_pos_grad, _s)
 
         if _tgt_quat is not None and _tgt_quat.requires_grad:
-            _tgt_quat._backward_from_qd(self.set_quat_grad, self._sim.cur_step_local)
+            _tgt_quat._backward_from_qd(self.set_quat_grad, _s)
 
     def collect_output_grads(self):
         """
