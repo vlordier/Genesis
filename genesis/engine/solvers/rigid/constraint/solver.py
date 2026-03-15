@@ -152,43 +152,43 @@ class ConstraintSolver:
     def add_equality_constraints(self):
         self._eq_const_info_cache.clear()
 
-        _s = self._solver
+        solver = self._solver
         add_equality_constraints(
-            _s.links_info,
-            _s.links_state,
-            _s.dofs_state,
-            _s.dofs_info,
-            _s.joints_info,
-            _s.equalities_info,
+            solver.links_info,
+            solver.links_state,
+            solver.dofs_state,
+            solver.dofs_info,
+            solver.joints_info,
+            solver.equalities_info,
             self.constraint_state,
             self._collider._collider_state,
-            _s._rigid_global_info,
-            _s._static_rigid_sim_config,
+            solver._rigid_global_info,
+            solver._static_rigid_sim_config,
         )
 
     def add_inequality_constraints(self):
-        _s = self._solver
+        solver = self._solver
         add_inequality_constraints(
-            _s.links_info,
-            _s.links_state,
-            _s.dofs_state,
-            _s.dofs_info,
-            _s.joints_info,
+            solver.links_info,
+            solver.links_state,
+            solver.dofs_state,
+            solver.dofs_info,
+            solver.joints_info,
             self.constraint_state,
             self._collider._collider_state,
-            _s._rigid_global_info,
-            _s._static_rigid_sim_config,
+            solver._rigid_global_info,
+            solver._static_rigid_sim_config,
         )
 
     def resolve(self):
-        _s = self._solver
-        _dofs_state = _s.dofs_state
-        _entities_info = _s.entities_info
-        _rigid_global_info = _s._rigid_global_info
-        _static_config = _s._static_rigid_sim_config
+        solver = self._solver
+        _dofs_state = solver.dofs_state
+        _entities_info = solver.entities_info
+        _rigid_global_info = solver._rigid_global_info
+        _static_config = solver._static_rigid_sim_config
 
         func_solve_init(
-            _s.dofs_info,
+            solver.dofs_info,
             _dofs_state,
             _entities_info,
             self.constraint_state,
@@ -209,41 +209,41 @@ class ConstraintSolver:
             _dofs_state,
             self.constraint_state,
             _static_config,
-            _s._errno,
+            solver._errno,
         )
 
-        if _s._options.noslip_iterations > 0:
+        if solver._options.noslip_iterations > 0:
             self.noslip()
 
         func_update_contact_force(
-            _s.links_state,
+            solver.links_state,
             self._collider._collider_state,
             self.constraint_state,
             _static_config,
         )
 
     def noslip(self):
-        _s = self._solver
-        _static_config = _s._static_rigid_sim_config
-        if _s._para_level >= gs.PARA_LEVEL.PARTIAL:
+        solver = self._solver
+        _static_config = solver._static_rigid_sim_config
+        if solver._para_level >= gs.PARA_LEVEL.PARTIAL:
             # GPU (any n_envs): split into Phase 1 (parallel M^{-1} solve) + Phase 2 (parallel AR build)
             constraint_noslip.kernel_compute_MinvJT(
-                _s.entities_info,
-                _s._rigid_global_info,
+                solver.entities_info,
+                solver._rigid_global_info,
                 self.constraint_state,
                 _static_config,
             )
             constraint_noslip.kernel_compute_AR_and_b(
-                _s.dofs_state,
+                solver.dofs_state,
                 self.constraint_state,
                 _static_config,
             )
         else:
             # CPU: use original fused kernel (no overhead)
             constraint_noslip.kernel_build_efc_AR_b(
-                _s.dofs_state,
-                _s.entities_info,
-                _s._rigid_global_info,
+                solver.dofs_state,
+                solver.entities_info,
+                solver._rigid_global_info,
                 self.constraint_state,
                 _static_config,
             )
@@ -251,14 +251,14 @@ class ConstraintSolver:
         constraint_noslip.kernel_noslip(
             self._collider._collider_state,
             self.constraint_state,
-            _s._rigid_global_info,
+            solver._rigid_global_info,
             _static_config,
         )
 
         constraint_noslip.kernel_dual_finish(
-            _s.dofs_state,
-            _s.entities_info,
-            _s._rigid_global_info,
+            solver.dofs_state,
+            solver.entities_info,
+            solver._rigid_global_info,
             self.constraint_state,
             _static_config,
         )

@@ -522,42 +522,42 @@ class Collider:
         )
 
     def detection(self) -> None:
-        _s = self._solver
+        solver = self._solver
         rigid_solver.kernel_update_geom_aabbs(
-            _s.geoms_state,
-            _s.geoms_init_AABB,
-            _s._static_rigid_sim_config,
+            solver.geoms_state,
+            solver.geoms_init_AABB,
+            solver._static_rigid_sim_config,
         )
 
         if self._n_possible_pairs == 0:
             return
 
         self._contact_data_cache.clear()
-        _static_config = _s._static_rigid_sim_config
-        _rigid_global_info = _s._rigid_global_info
+        _static_config = solver._static_rigid_sim_config
+        _rigid_global_info = solver._rigid_global_info
         func_broad_phase(
-            _s.links_state,
-            _s.links_info,
-            _s.geoms_state,
-            _s.geoms_info,
+            solver.links_state,
+            solver.links_info,
+            solver.geoms_state,
+            solver.geoms_info,
             _rigid_global_info,
             _static_config,
-            _s.constraint_solver.constraint_state,
+            solver.constraint_solver.constraint_state,
             self._collider_state,
-            _s.equalities_info,
+            solver.equalities_info,
             self._collider_info,
-            _s._errno,
+            solver._errno,
         )
         if self._collider_static_config.has_convex_convex:
             narrowphase.func_narrow_phase_convex_vs_convex(
-                _s.links_state,
-                _s.links_info,
-                _s.geoms_state,
-                _s.geoms_info,
-                _s.geoms_init_AABB,
-                _s.verts_info,
-                _s.faces_info,
-                _s.edges_info,
+                solver.links_state,
+                solver.links_info,
+                solver.geoms_state,
+                solver.geoms_info,
+                solver.geoms_init_AABB,
+                solver.verts_info,
+                solver.faces_info,
+                solver.edges_info,
                 _rigid_global_info,
                 _static_config,
                 self._collider_state,
@@ -571,26 +571,26 @@ class Collider:
                 self._sdf._sdf_info,
                 self._support_field._support_field_info,
                 self._gjk._gjk_state.diff_contact_input,
-                _s._errno,
+                solver._errno,
             )
         if self._collider_static_config.has_convex_specialization:
             func_narrow_phase_convex_specializations(
-                _s.geoms_state,
-                _s.geoms_info,
-                _s.geoms_init_AABB,
-                _s.verts_info,
+                solver.geoms_state,
+                solver.geoms_info,
+                solver.geoms_init_AABB,
+                solver.verts_info,
                 _rigid_global_info,
                 _static_config,
                 self._collider_state,
                 self._collider_info,
                 self._collider_static_config,
-                _s._errno,
+                solver._errno,
             )
         if self._collider_static_config.has_terrain:
             func_narrow_phase_any_vs_terrain(
-                _s.geoms_state,
-                _s.geoms_info,
-                _s.geoms_init_AABB,
+                solver.geoms_state,
+                solver.geoms_info,
+                solver.geoms_init_AABB,
                 _static_config,
                 self._collider_state,
                 self._collider_info,
@@ -598,24 +598,24 @@ class Collider:
                 self._mpr._mpr_state,
                 self._mpr._mpr_info,
                 self._support_field._support_field_info,
-                _s._errno,
+                solver._errno,
             )
         if self._collider_static_config.has_nonconvex_nonterrain:
             func_narrow_phase_nonconvex_vs_nonterrain(
-                _s.links_state,
-                _s.links_info,
-                _s.geoms_state,
-                _s.geoms_info,
-                _s.geoms_init_AABB,
-                _s.verts_info,
-                _s.edges_info,
+                solver.links_state,
+                solver.links_info,
+                solver.geoms_state,
+                solver.geoms_info,
+                solver.geoms_init_AABB,
+                solver.verts_info,
+                solver.edges_info,
                 _rigid_global_info,
                 _static_config,
                 self._collider_state,
                 self._collider_info,
                 self._collider_static_config,
                 self._sdf._sdf_info,
-                _s._errno,
+                solver._errno,
             )
 
     def get_contacts(self, as_tensor: bool = True, to_torch: bool = True, keep_batch_dim: bool = False):

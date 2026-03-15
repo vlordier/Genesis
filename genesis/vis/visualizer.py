@@ -235,14 +235,17 @@ class Visualizer(RBC):
             kinematic_solver.update_vgeoms()
             kinematic_solver.update_vgeoms_render_T()
 
-        if scene.mpm_solver.is_active:
-            scene.mpm_solver.update_render_fields()
+        mpm_solver = scene.mpm_solver
+        if mpm_solver.is_active:
+            mpm_solver.update_render_fields()
 
-        if scene.sph_solver.is_active:
-            scene.sph_solver.update_render_fields()
+        sph_solver = scene.sph_solver
+        if sph_solver.is_active:
+            sph_solver.update_render_fields()
 
-        if scene.pbd_solver.is_active:
-            scene.pbd_solver.update_render_fields()
+        pbd_solver = scene.pbd_solver
+        if pbd_solver.is_active:
+            pbd_solver.update_render_fields()
 
         self._t = scene._t
 
