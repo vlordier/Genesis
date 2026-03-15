@@ -206,7 +206,8 @@ class Visualizer(RBC):
         Update all visualization-only variables here.
         """
         # Early return if already updated previously
-        if not force_render and self._t >= self.scene._t:
+        scene = self._scene
+        if not force_render and self._t >= scene._t:
             return
 
         for camera in self._cameras:
@@ -216,31 +217,34 @@ class Visualizer(RBC):
                 elif camera._followed_entity is not None:
                     camera.update_following()
 
-        if self._scene.rigid_solver.is_active:
-            self._scene.rigid_solver.update_geoms_render_T()
-            self._scene.rigid_solver.update_vgeoms()
+        # Cache solver references locally to avoid repeated scene attribute lookups
+        rigid_solver = scene.rigid_solver
+        if rigid_solver.is_active:
+            rigid_solver.update_geoms_render_T()
+            rigid_solver.update_vgeoms()
 
             # drone propellers
-            for entity in self._scene.rigid_solver.entities:
+            for entity in rigid_solver.entities:
                 if isinstance(entity, gs.engine.entities.DroneEntity):
                     entity.update_propeller_vgeoms()
 
-            self._scene.rigid_solver.update_vgeoms_render_T()
+            rigid_solver.update_vgeoms_render_T()
 
-        if self._scene.kinematic_solver.is_active:
-            self._scene.kinematic_solver.update_vgeoms()
-            self._scene.kinematic_solver.update_vgeoms_render_T()
+        kinematic_solver = scene.kinematic_solver
+        if kinematic_solver.is_active:
+            kinematic_solver.update_vgeoms()
+            kinematic_solver.update_vgeoms_render_T()
 
-        if self._scene.mpm_solver.is_active:
-            self._scene.mpm_solver.update_render_fields()
+        if scene.mpm_solver.is_active:
+            scene.mpm_solver.update_render_fields()
 
-        if self._scene.sph_solver.is_active:
-            self._scene.sph_solver.update_render_fields()
+        if scene.sph_solver.is_active:
+            scene.sph_solver.update_render_fields()
 
-        if self._scene.pbd_solver.is_active:
-            self._scene.pbd_solver.update_render_fields()
+        if scene.pbd_solver.is_active:
+            scene.pbd_solver.update_render_fields()
 
-        self._t = self._scene._t
+        self._t = scene._t
 
     def colorize_seg_idxc_arr(self, seg_idxc_arr):
         if self._batch_renderer is not None:

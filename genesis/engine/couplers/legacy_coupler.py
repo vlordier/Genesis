@@ -54,6 +54,10 @@ class LegacyCoupler(RBC):
         self._fem_mpm = self.fem_solver.is_active and self.mpm_solver.is_active and self.options.fem_mpm
         self._fem_sph = self.fem_solver.is_active and self.sph_solver.is_active and self.options.fem_sph
 
+        # Cache solver active flags to avoid repeated property lookups in per-substep couple()
+        self._mpm_active = self.mpm_solver.is_active
+        self._fem_active = self.fem_solver.is_active
+
         if (self._rigid_mpm or self._rigid_sph or self._rigid_pbd or self._rigid_fem) and any(
             geom.needs_coup for geom in self.rigid_solver.geoms
         ):
@@ -105,6 +109,11 @@ class LegacyCoupler(RBC):
         ## DEBUG
         self._dx = 1 / 1024
         self._stencil_size = int(np.floor(self._dx / self.sph_solver.hash_grid_cell_size) + 2)
+
+        # Cache deeply-nested rigid solver references to avoid 3-4 level chains in per-substep couple()
+        _collider = self.rigid_solver.collider
+        self._sdf_info = _collider._sdf._sdf_info
+        self._collider_static_config = _collider._collider_static_config
 
         self.reset(envs_idx=self.sim.scene._envs_idx)
 
@@ -932,90 +941,99 @@ class LegacyCoupler(RBC):
     def preprocess(self, f):
         # preprocess for MPM CPIC
         if self._rigid_mpm and self.mpm_solver.enable_CPIC:
+            _rs = self.rigid_solver
             self.mpm_surface_to_particle(
                 f,
-                self.rigid_solver.geoms_state,
-                self.rigid_solver.geoms_info,
-                self.rigid_solver.collider._sdf._sdf_info,
-                self.rigid_solver._rigid_global_info,
-                self.rigid_solver.collider._collider_static_config,
+                _rs.geoms_state,
+                _rs.geoms_info,
+                self._sdf_info,
+                _rs._rigid_global_info,
+                self._collider_static_config,
             )
 
     def couple(self, f):
+        _rs = self.rigid_solver
+        _sdf_info = self._sdf_info
+        _csc = self._collider_static_config
+
         # MPM <-> all others
-        if self.mpm_solver.is_active:
+        if self._mpm_active:
             self.mpm_grid_op(
                 f,
                 self.sim.cur_t,
-                geoms_state=self.rigid_solver.geoms_state,
-                geoms_info=self.rigid_solver.geoms_info,
-                links_state=self.rigid_solver.links_state,
-                rigid_global_info=self.rigid_solver._rigid_global_info,
-                sdf_info=self.rigid_solver.collider._sdf._sdf_info,
-                collider_static_config=self.rigid_solver.collider._collider_static_config,
+                geoms_state=_rs.geoms_state,
+                geoms_info=_rs.geoms_info,
+                links_state=_rs.links_state,
+                rigid_global_info=_rs._rigid_global_info,
+                sdf_info=_sdf_info,
+                collider_static_config=_csc,
             )
 
         # SPH <-> Rigid
         if self._rigid_sph:
             self.sph_rigid(
                 f,
-                self.rigid_solver.geoms_state,
-                self.rigid_solver.geoms_info,
-                self.rigid_solver.links_state,
-                self.rigid_solver._rigid_global_info,
-                self.rigid_solver.collider._sdf._sdf_info,
-                self.rigid_solver.collider._collider_static_config,
+                _rs.geoms_state,
+                _rs.geoms_info,
+                _rs.links_state,
+                _rs._rigid_global_info,
+                _sdf_info,
+                _csc,
             )
 
         # PBD <-> Rigid
         if self._rigid_pbd:
             self.kernel_pbd_rigid_collide(
-                geoms_state=self.rigid_solver.geoms_state,
-                geoms_info=self.rigid_solver.geoms_info,
-                links_state=self.rigid_solver.links_state,
-                sdf_info=self.rigid_solver.collider._sdf._sdf_info,
-                rigid_global_info=self.rigid_solver._rigid_global_info,
-                collider_static_config=self.rigid_solver.collider._collider_static_config,
+                geoms_state=_rs.geoms_state,
+                geoms_info=_rs.geoms_info,
+                links_state=_rs.links_state,
+                sdf_info=_sdf_info,
+                rigid_global_info=_rs._rigid_global_info,
+                collider_static_config=_csc,
             )
 
             # 1-way: animate particles by links
             full_step_inv_dt = 1.0 / self.pbd_solver._dt
             clamped_inv_dt = min(full_step_inv_dt, CLAMPED_INV_DT)
-            self.kernel_pbd_rigid_solve_animate_particles_by_link(clamped_inv_dt, self.rigid_solver.links_state)
+            self.kernel_pbd_rigid_solve_animate_particles_by_link(clamped_inv_dt, _rs.links_state)
 
-        if self.fem_solver.is_active:
+        if self._fem_active:
             self.fem_surface_force(
                 f,
-                self.rigid_solver.geoms_state,
-                self.rigid_solver.geoms_info,
-                self.rigid_solver.links_state,
-                self.rigid_solver._rigid_global_info,
-                self.rigid_solver.collider._sdf._sdf_info,
-                self.rigid_solver.collider._collider_static_config,
+                _rs.geoms_state,
+                _rs.geoms_info,
+                _rs.links_state,
+                _rs._rigid_global_info,
+                _sdf_info,
+                _csc,
             )
             self.fem_rigid_link_constraints()
 
     def couple_grad(self, f):
-        if self.fem_solver.is_active:
+        _rs = self.rigid_solver
+        _sdf_info = self._sdf_info
+        _csc = self._collider_static_config
+
+        if self._fem_active:
             self.fem_surface_force.grad(
                 f,
-                self.rigid_solver.geoms_state,
-                self.rigid_solver.geoms_info,
-                self.rigid_solver.links_state,
-                self.rigid_solver._rigid_global_info,
-                self.rigid_solver.collider._sdf._sdf_info,
-                self.rigid_solver.collider._collider_static_config,
+                _rs.geoms_state,
+                _rs.geoms_info,
+                _rs.links_state,
+                _rs._rigid_global_info,
+                _sdf_info,
+                _csc,
             )
-        if self.mpm_solver.is_active:
+        if self._mpm_active:
             self.mpm_grid_op.grad(
                 f,
                 self.sim.cur_t,
-                geoms_state=self.rigid_solver.geoms_state,
-                geoms_info=self.rigid_solver.geoms_info,
-                links_state=self.rigid_solver.links_state,
-                rigid_global_info=self.rigid_solver._rigid_global_info,
-                sdf_info=self.rigid_solver.collider._sdf._sdf_info,
-                collider_static_config=self.rigid_solver.collider._collider_static_config,
+                geoms_state=_rs.geoms_state,
+                geoms_info=_rs.geoms_info,
+                links_state=_rs.links_state,
+                rigid_global_info=_rs._rigid_global_info,
+                sdf_info=_sdf_info,
+                collider_static_config=_csc,
             )
 
     @property

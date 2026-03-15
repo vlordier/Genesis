@@ -649,6 +649,7 @@ def qd_to_torch(
     else:
         tensor = qd_to_python(value, transpose, copy=copy, to_torch=True)
 
+    # Fast path: most common case has no masking — return early before mask processing
     if row_mask is None and col_mask is None:
         return tensor
 
