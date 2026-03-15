@@ -507,14 +507,16 @@ class KinematicLink(RBC):
         """
         Number of vertices of all the link's vgeoms.
         """
-        return sum([vgeom.n_vverts for vgeom in self._vgeoms])
+        # Use generator expression instead of list comprehension to avoid intermediate list allocation
+        return sum(vgeom.n_vverts for vgeom in self._vgeoms)
 
     @property
     def n_vfaces(self) -> int:
         """
         Number of faces of all the link's vgeoms.
         """
-        return sum([vgeom.n_vfaces for vgeom in self._vgeoms])
+        # Use generator expression instead of list comprehension to avoid intermediate list allocation
+        return sum(vgeom.n_vfaces for vgeom in self._vgeoms)
 
     @property
     def is_built(self) -> bool:
@@ -1011,28 +1013,28 @@ class RigidLink(KinematicLink):
         """
         Number of sdf cells of all the link's geoms.
         """
-        return sum([geom.n_cells for geom in self._geoms])
+        return sum(geom.n_cells for geom in self._geoms)
 
     @property
     def n_verts(self) -> int:
         """
         Number of vertices of all the link's geoms.
         """
-        return sum([geom.n_verts for geom in self._geoms])
+        return sum(geom.n_verts for geom in self._geoms)
 
     @property
     def n_faces(self) -> int:
         """
         Number of faces of all the link's geoms.
         """
-        return sum([geom.n_faces for geom in self._geoms])
+        return sum(geom.n_faces for geom in self._geoms)
 
     @property
     def n_edges(self) -> int:
         """
         Number of edges of all the link's geoms.
         """
-        return sum([geom.n_edges for geom in self._geoms])
+        return sum(geom.n_edges for geom in self._geoms)
 
     @property
     def is_free(self):

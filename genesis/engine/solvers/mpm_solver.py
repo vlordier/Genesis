@@ -619,25 +619,27 @@ class MPMSolver(Solver):
 
     def add_grad_from_state(self, state):
         if self.is_active:
+            # Cache cur_substep_local to avoid repeated property chain (5 calls → 1)
+            _f = self._sim.cur_substep_local
             if state.pos.grad is not None:
                 state.pos.assert_contiguous()
-                self.add_grad_from_pos(self._sim.cur_substep_local, state.pos.grad)
+                self.add_grad_from_pos(_f, state.pos.grad)
 
             if state.vel.grad is not None:
                 state.vel.assert_contiguous()
-                self.add_grad_from_vel(self._sim.cur_substep_local, state.vel.grad)
+                self.add_grad_from_vel(_f, state.vel.grad)
 
             if state.C.grad is not None:
                 state.C.assert_contiguous()
-                self.add_grad_from_C(self._sim.cur_substep_local, state.C.grad)
+                self.add_grad_from_C(_f, state.C.grad)
 
             if state.F.grad is not None:
                 state.F.assert_contiguous()
-                self.add_grad_from_F(self._sim.cur_substep_local, state.F.grad)
+                self.add_grad_from_F(_f, state.F.grad)
 
             if state.Jp.grad is not None:
                 state.Jp.assert_contiguous()
-                self.add_grad_from_Jp(self._sim.cur_substep_local, state.Jp.grad)
+                self.add_grad_from_Jp(_f, state.Jp.grad)
 
     @qd.kernel
     def add_grad_from_pos(self, f: qd.i32, pos_grad: qd.types.ndarray()):
@@ -707,11 +709,13 @@ class MPMSolver(Solver):
         self.copy_frame(self._sim.substeps_local, 0)
 
     def load_ckpt(self, ckpt_name):
-        self.copy_frame(0, self._sim.substeps_local)
-        self.copy_grad(0, self._sim.substeps_local)
+        # Cache substeps_local to avoid repeated property chain (4 calls → 1)
+        _substeps_local = self._sim.substeps_local
+        self.copy_frame(0, _substeps_local)
+        self.copy_grad(0, _substeps_local)
 
         if self._sim.requires_grad:
-            self.reset_grad_till_frame(self._sim.substeps_local)
+            self.reset_grad_till_frame(_substeps_local)
 
             self._kernel_set_state(
                 0,
@@ -784,7 +788,8 @@ class MPMSolver(Solver):
             active[i_b, i_p] = qd.cast(self.particles_ng[f, i_p, i_b].active, gs.qd_bool)
 
     def update_render_fields(self):
-        self._kernel_update_render_fields(self.sim.cur_substep_local)
+        # Use _sim instead of sim property to avoid extra property lookup
+        self._kernel_update_render_fields(self._sim.cur_substep_local)
 
     @qd.kernel
     def _kernel_update_render_fields(self, f: qd.i32):

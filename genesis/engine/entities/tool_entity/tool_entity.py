@@ -150,9 +150,11 @@ class ToolEntity(Entity):
         self.copy_frame(self._sim.substeps_local, 0)
 
     def load_ckpt(self, ckpt_name):
-        self.copy_frame(0, self._sim.substeps_local)
-        self.copy_grad(0, self._sim.substeps_local)
-        self.reset_grad_till_frame(self._sim.substeps_local)
+        # Cache substeps_local to avoid repeated property chain (3 calls → 1)
+        _substeps_local = self._sim.substeps_local
+        self.copy_frame(0, _substeps_local)
+        self.copy_grad(0, _substeps_local)
+        self.reset_grad_till_frame(_substeps_local)
 
         self.load_ckpt_kernel(
             self._ckpt[ckpt_name]["pos"],
@@ -460,27 +462,31 @@ class ToolEntity(Entity):
         """
         Collect gradients from external queried states.
         """
-        if self._sim.cur_step_global in self._queried_states:
+        # Cache cur_step_global to avoid repeated property chain
+        _cur_step = self._sim.cur_step_global
+        if _cur_step in self._queried_states:
             # one step could have multiple states
-            for state in self._queried_states[self._sim.cur_step_global]:
+            for state in self._queried_states[_cur_step]:
                 self.add_grad_from_state(state)
 
     def add_grad_from_state(self, state):
+        # Cache cur_substep_local to avoid repeated property chain (4 calls → 1)
+        _f = self._sim.cur_substep_local
         if state.pos.grad is not None:
             state.pos.assert_contiguous()
-            self.set_frame_add_grad_pos(self._sim.cur_substep_local, state.pos.grad)
+            self.set_frame_add_grad_pos(_f, state.pos.grad)
 
         if state.quat.grad is not None:
             state.quat.assert_contiguous()
-            self.set_frame_add_grad_quat(self._sim.cur_substep_local, state.quat.grad)
+            self.set_frame_add_grad_quat(_f, state.quat.grad)
 
         if state.vel.grad is not None:
             state.vel.assert_contiguous()
-            self.set_frame_add_grad_vel(self._sim.cur_substep_local, state.vel.grad)
+            self.set_frame_add_grad_vel(_f, state.vel.grad)
 
         if state.ang.grad is not None:
             state.ang.assert_contiguous()
-            self.set_frame_add_grad_ang(self._sim.cur_substep_local, state.ang.grad)
+            self.set_frame_add_grad_ang(_f, state.ang.grad)
 
     # ------------------------------------------------------------------------------------
     # ----------------------------------- properties -------------------------------------

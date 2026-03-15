@@ -637,24 +637,26 @@ class FEMEntity(Entity):
                 self._tgt_buffer[key].append(self._tgt[key])
 
         # set_pos followed by set_vel, because set_pos resets velocity.
+        # Cache cur_substep_local to avoid repeated property chain (→ f_global_to_f_local → modulo)
+        _f = self._sim.cur_substep_local
         if self._tgt["pos"] is not None:
             self._tgt["pos"].assert_contiguous()
             self._tgt["pos"].assert_sceneless()
-            self.set_pos(self._sim.cur_substep_local, self._tgt["pos"])
+            self.set_pos(_f, self._tgt["pos"])
 
         if self._tgt["vel"] is not None:
             self._tgt["vel"].assert_contiguous()
             self._tgt["vel"].assert_sceneless()
-            self.set_vel(self._sim.cur_substep_local, self._tgt["vel"])
+            self.set_vel(_f, self._tgt["vel"])
 
         if self._tgt["act"] is not None:
             assert self._tgt["act"] in (gs.ACTIVE, gs.INACTIVE)
-            self.set_active(self._sim.cur_substep_local, self._tgt["act"])
+            self.set_active(_f, self._tgt["act"])
 
         if self._tgt["actu"] is not None:
             self._tgt["actu"].assert_contiguous()
             self._tgt["actu"].assert_sceneless()
-            self.set_actu(self._sim.cur_substep_local, self._tgt["actu"])
+            self.set_actu(_f, self._tgt["actu"])
 
         for key in self._tgt_keys:
             self._tgt[key] = None
@@ -672,18 +674,21 @@ class FEMEntity(Entity):
         _tgt_vel = self._tgt_buffer["vel"].pop()
         _tgt_pos = self._tgt_buffer["pos"].pop()
 
+        # Cache cur_substep_local to avoid repeated property chain per grad call
+        _f = self._sim.cur_substep_local
+
         if _tgt_actu is not None and _tgt_actu.requires_grad:
-            _tgt_actu._backward_from_qd(self.set_actu_grad, self._sim.cur_substep_local)
+            _tgt_actu._backward_from_qd(self.set_actu_grad, _f)
 
         if _tgt_vel is not None and _tgt_vel.requires_grad:
-            _tgt_vel._backward_from_qd(self.set_vel_grad, self._sim.cur_substep_local)
+            _tgt_vel._backward_from_qd(self.set_vel_grad, _f)
 
         if _tgt_pos is not None and _tgt_pos.requires_grad:
-            _tgt_pos._backward_from_qd(self.set_pos_grad, self._sim.cur_substep_local)
+            _tgt_pos._backward_from_qd(self.set_pos_grad, _f)
 
         if _tgt_vel is not None or _tgt_pos is not None or _tgt_actu is not None:
             # manually zero the grad since manually setting state breaks gradient flow
-            self.clear_grad(self._sim.cur_substep_local)
+            self.clear_grad(_f)
 
     def _assert_active(self):
         if not self.active:
