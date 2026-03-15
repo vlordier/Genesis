@@ -412,7 +412,7 @@ class Simulator(RBC):
             self.step(in_backward=True)
 
         gs.logger.debug(
-            f"Backward: Loaded checkpoint for global substep {ckpt_start_substep} to {ckpt_end_step}. Now starts from substep {ckpt_start_substep}."
+            f"Backward: Loaded checkpoint for global substep {ckpt_start_substep} to {self._cur_substep_global - 1}. Now starts from substep {ckpt_start_substep}."
         )
 
     # ------------------------------------------------------------------------------------
