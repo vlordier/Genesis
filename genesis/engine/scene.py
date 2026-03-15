@@ -862,6 +862,9 @@ class Scene(RBC):
         if self.profiling_options.show_FPS:
             self.FPS_tracker = FPSTracker(self.n_envs, alpha=self.profiling_options.FPS_tracker_alpha)
 
+        # Cache profiling flag to avoid repeated attribute lookup in hot step() loop
+        self._show_FPS = self.profiling_options.show_FPS
+
         # recorders
         self._recorder_manager.build()
 
@@ -999,7 +1002,7 @@ class Scene(RBC):
         if update_visualizer:
             self._visualizer.update(force=False, auto=refresh_visualizer)
 
-        if self.profiling_options.show_FPS:
+        if self._show_FPS:
             self.FPS_tracker.step()
 
         self._recorder_manager.step(self._sim.cur_step_global)

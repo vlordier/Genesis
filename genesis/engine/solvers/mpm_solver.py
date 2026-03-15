@@ -208,6 +208,9 @@ class MPMSolver(Solver):
 
         self._coupler = self.sim._coupler
 
+        # Cache rigid solver reference to avoid deep attribute chain traversals in hot substep loops
+        self._rigid_solver = self.sim.rigid_solver
+
         if self.is_active:
             if self._enable_CPIC and self._sim.requires_grad:
                 gs.raise_exception(
@@ -503,40 +506,43 @@ class MPMSolver(Solver):
         self.reset_grid_and_grad(f)
         self.compute_F_tmp(f)
         self.svd(f)
+        _rs = self._rigid_solver
         self.p2g(
             f,
-            self.sim.coupler.rigid_solver.geoms_state,
-            self.sim.coupler.rigid_solver.geoms_info,
-            self.sim.coupler.rigid_solver.links_state,
-            self.sim.coupler.rigid_solver._rigid_global_info,
-            self.sim.coupler.rigid_solver.collider._sdf._sdf_info,
-            self.sim.coupler.rigid_solver.collider._collider_static_config,
+            _rs.geoms_state,
+            _rs.geoms_info,
+            _rs.links_state,
+            _rs._rigid_global_info,
+            _rs.collider._sdf._sdf_info,
+            _rs.collider._collider_static_config,
         )
 
     def substep_pre_coupling_grad(self, f):
+        _rs = self._rigid_solver
         self.p2g.grad(
             f,
-            self.sim.coupler.rigid_solver.geoms_state,
-            self.sim.coupler.rigid_solver.geoms_info,
-            self.sim.coupler.rigid_solver.links_state,
-            self.sim.coupler.rigid_solver._rigid_global_info,
-            self.sim.coupler.rigid_solver.collider._sdf._sdf_info,
-            self.sim.coupler.rigid_solver.collider._collider_static_config,
+            _rs.geoms_state,
+            _rs.geoms_info,
+            _rs.links_state,
+            _rs._rigid_global_info,
+            _rs.collider._sdf._sdf_info,
+            _rs.collider._collider_static_config,
         )
         self.svd_grad(f)
         self.compute_F_tmp.grad(f)
 
     def substep_post_coupling(self, f):
+        _rs = self._rigid_solver
         self.g2p(
             f,
-            self.sim.coupler.rigid_solver.geoms_info,
-            self.sim.coupler.rigid_solver.links_state,
-            self.sim.coupler.rigid_solver._rigid_global_info,
+            _rs.geoms_info,
+            _rs.links_state,
+            _rs._rigid_global_info,
         )
 
         # Apply particle constraints after g2p
         if self._constraints_initialized:
-            self.apply_particle_constraints(f, self.sim.coupler.rigid_solver.links_state)
+            self.apply_particle_constraints(f, _rs.links_state)
 
         # FIXME: Use existing errno mechanism for this.
         if not self._is_state_valid(f):
@@ -545,11 +551,12 @@ class MPMSolver(Solver):
             )
 
     def substep_post_coupling_grad(self, f):
+        _rs = self._rigid_solver
         self.g2p.grad(
             f,
-            self.sim.coupler.rigid_solver.geoms_info,
-            self.sim.coupler.rigid_solver.links_state,
-            self.sim.coupler.rigid_solver._rigid_global_info,
+            _rs.geoms_info,
+            _rs.links_state,
+            _rs._rigid_global_info,
         )
 
     @qd.kernel

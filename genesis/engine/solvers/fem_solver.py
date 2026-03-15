@@ -336,6 +336,11 @@ class FEMSolver(Solver):
         self._B = self.sim._B
         self.tet_wrong_order = qd.field(dtype=gs.qd_bool, shape=(), needs_grad=False)
 
+        # Cache coupler type check to avoid repeated isinstance() + import in hot substep loops
+        from genesis.engine.couplers import IPCCoupler
+
+        self._coupler_is_ipc = isinstance(self.sim._coupler, IPCCoupler)
+
         # batch fields
         self.init_batch_fields()
 
@@ -964,9 +969,7 @@ class FEMSolver(Solver):
     def substep_pre_coupling(self, f):
         if self.is_active:
             # Skip FEM solver step if using IPCCoupler (IPC handles FEM simulation)
-            from genesis.engine.couplers import IPCCoupler
-
-            if isinstance(self.sim._coupler, IPCCoupler):
+            if self._coupler_is_ipc:
                 pass  # IPC coupler handles FEM simulation
             elif self._use_implicit_solver:
                 self.precompute_material_data(f)

@@ -207,6 +207,9 @@ class Simulator(RBC):
                     self._rigid_only = False
         self._coupler.build()
 
+        # Cache frequently accessed flags to avoid repeated property lookups in hot loops
+        self._rigid_solver_is_active = self.rigid_solver.is_active
+
         if self.n_envs > 0 and self.sf_solver.is_active:
             gs.raise_exception("Batching is not supported for SF solver as of now.")
 
@@ -274,34 +277,45 @@ class Simulator(RBC):
         # This will trigger GPU sync, but it is not a big deal at the point, since we are going to enqueue very large
         # kernel right away. Moreover, if computations are still not done at this point, then the queue will just
         # continue growing endlessly, which will not make the simulation faster either.
-        if self.rigid_solver.is_active and self._cur_substep_global % RATE_CHECK_ERRNO == 0:
+        if self._rigid_solver_is_active and self._cur_substep_global % RATE_CHECK_ERRNO == 0:
             self.rigid_solver.check_errno()
 
         if self._rigid_only and not self._requires_grad:  # "Only Advance!" --Thomas Wade :P
+            # Cache method reference and local variable to avoid repeated property/method lookups in tight loop
+            _rigid_substep = self.rigid_solver.substep
+            _substeps_local = self._substeps_local
+            _f_global = self._cur_substep_global
             for _ in range(self._substeps):
-                self.rigid_solver.substep(self.cur_substep_local)
-                self._cur_substep_global += 1
+                _rigid_substep(_f_global % _substeps_local)
+                _f_global += 1
+            self._cur_substep_global = _f_global
         else:
             self.process_input(in_backward=in_backward)
+            _substep = self.substep
+            _substeps_local = self._substeps_local
+            _f_global = self._cur_substep_global
+            _save_ckpt = not in_backward
             for _ in range(self._substeps):
-                self.substep(self.cur_substep_local)
-
-                self._cur_substep_global += 1
-                if self.cur_substep_local == 0 and not in_backward:
+                _substep(_f_global % _substeps_local)
+                _f_global += 1
+                if _save_ckpt and _f_global % _substeps_local == 0:
+                    self._cur_substep_global = _f_global
                     self.save_ckpt()
+            self._cur_substep_global = _f_global
 
-        if self.rigid_solver.is_active:
+        if self._rigid_solver_is_active:
             self.rigid_solver.clear_external_force()
 
         self._sensor_manager.step()
 
     def _step_grad(self):
+        _substeps_local = self._substeps_local
+        _sub_step_grad = self.sub_step_grad
         for _ in range(self._substeps - 1, -1, -1):
-            if self.cur_substep_local == 0:
+            if self._cur_substep_global % _substeps_local == 0:
                 self.load_ckpt()
             self._cur_substep_global -= 1
-
-            self.sub_step_grad(self.cur_substep_local)
+            _sub_step_grad(self._cur_substep_global % _substeps_local)
 
         self.process_input_grad()
 
@@ -375,21 +389,19 @@ class Simulator(RBC):
         This function is called every `substeps_local` steps, which means it's called only once per step when `requires_grad` is True.
         """
         ckpt_start_substep = self._cur_substep_global - self._substeps_local
-        ckpt_end_step = self._cur_substep_global - 1
-        ckpt_name = f"{ckpt_start_substep}"
+        ckpt_name = str(ckpt_start_substep)
 
         for solver in self._active_solvers:
             solver.save_ckpt(ckpt_name)
 
         if self._requires_grad:
             gs.logger.debug(
-                f"Forward: Saved checkpoint for global substep {ckpt_start_substep} to {ckpt_end_step}. Now starts from substep {self._cur_substep_global}."
+                f"Forward: Saved checkpoint for global substep {ckpt_start_substep} to {self._cur_substep_global - 1}. Now starts from substep {self._cur_substep_global}."
             )
 
     def load_ckpt(self):
         ckpt_start_substep = self._cur_substep_global - self._substeps_local
-        ckpt_end_step = self._cur_substep_global - 1
-        ckpt_name = f"{ckpt_start_substep}"
+        ckpt_name = str(ckpt_start_substep)
 
         for solver in self._active_solvers:
             solver.load_ckpt(ckpt_name)
