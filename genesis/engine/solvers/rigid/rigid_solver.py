@@ -355,6 +355,12 @@ class RigidSolver(KinematicSolver):
         self._init_collider()
         self._init_constraint_solver()
 
+        # Cache coupler type checks to avoid repeated isinstance() + import in hot substep loops
+        from genesis.engine.couplers import SAPCoupler, IPCCoupler
+
+        self._coupler_is_sap = isinstance(self.sim.coupler, SAPCoupler)
+        self._coupler_is_ipc = isinstance(self.sim.coupler, IPCCoupler)
+
         # FIXME: when the migration is finished, we will remove the about two lines
         self._func_vel_at_point = func_vel_at_point
         self._func_apply_coupling_force = func_apply_coupling_force
@@ -882,9 +888,6 @@ class RigidSolver(KinematicSolver):
             self.constraint_solver = ConstraintSolver(self)
 
     def substep(self, f):
-        # from genesis.utils.tools import create_timer
-        from genesis.engine.couplers import SAPCoupler
-
         if self._requires_grad and f == 0:
             kernel_save_adjoint_cache(
                 f=f,
@@ -913,7 +916,7 @@ class RigidSolver(KinematicSolver):
             self._is_backward,
         )
 
-        if isinstance(self.sim.coupler, SAPCoupler):
+        if self._coupler_is_sap:
             update_qvel(
                 self.dofs_state,
                 self._rigid_global_info,
@@ -1167,9 +1170,7 @@ class RigidSolver(KinematicSolver):
     def substep_pre_coupling(self, f):
         if self.is_active:
             # Skip rigid body computation when using IPCCoupler (IPC handles rigid simulation)
-            from genesis.engine.couplers import IPCCoupler
-
-            if isinstance(self.sim.coupler, IPCCoupler):
+            if self._coupler_is_ipc:
                 # If any rigid entity is coupled to IPC, skip pre-coupling rigid simulation
                 # The rigid simulation will be done in post-coupling phase instead
                 if self.sim.coupler.has_any_rigid_coupling:
@@ -1347,12 +1348,10 @@ class RigidSolver(KinematicSolver):
         self._is_backward = False
 
     def substep_post_coupling(self, f):
-        from genesis.engine.couplers import SAPCoupler, IPCCoupler
-
         if not self.is_active:
             return
 
-        if isinstance(self.sim.coupler, SAPCoupler):
+        if self._coupler_is_sap:
             update_qacc_from_qvel_delta(
                 dofs_state=self.dofs_state,
                 rigid_global_info=self._rigid_global_info,
@@ -1377,7 +1376,7 @@ class RigidSolver(KinematicSolver):
                 is_backward=self._is_backward,
                 errno=self._errno,
             )
-        elif isinstance(self.sim.coupler, IPCCoupler):
+        elif self._coupler_is_ipc:
             # If any rigid entity is coupled to IPC, perform rigid simulation in post-coupling phase.
             # Collision exclusion for IPC-coupled links is handled in the collider at build time.
             if self.sim.coupler.has_any_rigid_coupling:

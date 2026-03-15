@@ -68,6 +68,11 @@ class SensorManager:
             self._cache[dtype] = torch.zeros(cache_shape, dtype=dtype, device=gs.device)
             self._buffered_data[dtype] = TensorRingBuffer(max_buffer_len, cache_shape, dtype=dtype)
 
+        # Pre-allocate empty tensors per dtype to avoid repeated torch.tensor([]) allocation in step()/reset()
+        self._empty_tensors: dict[Type[torch.dtype], torch.Tensor] = {}
+        for dtype in cache_size_per_dtype.keys():
+            self._empty_tensors[dtype] = torch.tensor([], dtype=dtype, device=gs.device)
+
         for sensor_cls, sensors in self._sensors_by_type.items():
             dtype = sensor_cls._get_cache_dtype()
             for sensor in sensors:
@@ -88,10 +93,11 @@ class SensorManager:
             self._ground_truth_cache[dtype][envs_idx] = 0.0
             self._cache[dtype][envs_idx] = 0.0
             self._buffered_data[dtype].buffer[:, envs_idx] = 0.0
+            _empty = self._empty_tensors[dtype]
             for is_ground_truth in (False, True):
                 key = (is_ground_truth, dtype)
                 self._is_last_cache_cloned[key] = False
-                self._cloned_cache[key] = torch.tensor([], dtype=dtype, device=gs.device)
+                self._cloned_cache[key] = _empty
 
         for sensor_cls in self._sensors_by_type.keys():
             sensor_cls.reset(self._sensors_metadata[sensor_cls], envs_idx)
@@ -113,10 +119,11 @@ class SensorManager:
                     self._cache[dtype][:, cache_slice],
                     self._buffered_data[dtype][:, cache_slice],
                 )
+            _empty = self._empty_tensors[dtype]
             for is_ground_truth in (False, True):
                 key = (is_ground_truth, dtype)
                 self._is_last_cache_cloned[key] = False
-                self._cloned_cache[key] = torch.tensor([], dtype=dtype, device=gs.device)
+                self._cloned_cache[key] = _empty
 
     def draw_debug(self, context: "RasterizerContext", buffer_updates: dict[str, np.ndarray]):
         for sensor in self.sensors:

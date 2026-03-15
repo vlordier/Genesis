@@ -488,8 +488,10 @@ class ParticleEntity(Entity):
         """
         Collect gradients from external queried states.
         """
-        if self._sim.cur_step_global in self._queried_states:
-            for state in self._queried_states[self._sim.cur_step_global]:
+        # Cache cur_step_global to avoid recomputation via property chain
+        _cur_step = self._sim.cur_step_global
+        if _cur_step in self._queried_states:
+            for state in self._queried_states[_cur_step]:
                 self.add_grad_from_state(state)
 
     # ------------------------------------------------------------------------------------

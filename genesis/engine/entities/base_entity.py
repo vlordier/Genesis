@@ -86,7 +86,8 @@ class Entity(RBC):
 
     @property
     def is_built(self):
-        return self._solver._scene._is_built
+        # Direct access to _is_built avoids triple-depth chain: self._solver → _scene → _is_built
+        return self._scene._is_built
 
     @property
     def name(self) -> str:

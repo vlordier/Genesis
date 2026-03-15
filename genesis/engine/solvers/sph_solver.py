@@ -683,9 +683,10 @@ class SPHSolver(Solver):
     def substep_pre_coupling(self, f):
         if self.is_active:
             self._kernel_reorder_particles(f)
+            _cur_t = self._sim.cur_t
             if self._pressure_solver == "WCSPH":
                 self._kernel_compute_rho(f)
-                self._kernel_compute_non_pressure_forces(f, self._sim.cur_t)
+                self._kernel_compute_non_pressure_forces(f, _cur_t)
                 self._kernel_compute_pressure_forces(f)
                 self._kernel_advect_velocity(f)
             elif self._pressure_solver == "DFSPH":
@@ -693,7 +694,7 @@ class SPHSolver(Solver):
                 self._kernel_compute_DFSPH_factor(f)
                 self._divergence_solve(f)
                 self._kernel_advect_velocity(f)
-                self._kernel_compute_non_pressure_forces(f, self._sim.cur_t)
+                self._kernel_compute_non_pressure_forces(f, _cur_t)
                 self._kernel_predict_velocity(f)
                 self._density_solve(f)
 

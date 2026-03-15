@@ -147,6 +147,7 @@ class Solver(RBC):
 
     @property
     def is_built(self):
+        # Direct access to cached _scene attribute instead of going through property
         return self._scene._is_built
 
     @property

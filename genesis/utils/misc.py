@@ -541,12 +541,15 @@ def indices_to_mask(
         copy (bool, optional): Wether to raise an exception if the resulting mask requires advanced indexing (aka. fancy
         indexing), which would trigger a copy when extracting slice.
     """
+    # Build mask in reverse order using append (O(1)) then reverse at the end,
+    # instead of insert(0, ...) which is O(n) per iteration.
     mask: list[slice | int | torch.Tensor] = []
 
     is_all_none = True
     num_tensors = 0
-    is_tensor: list[bool] = [False] * len(indices)
-    for i in range(len(indices) - 1, -1, -1):
+    n_indices = len(indices)
+    is_tensor: list[bool] = [False] * n_indices
+    for i in range(n_indices - 1, -1, -1):
         arg = indices[i]
         if arg is None:
             if is_all_none:
@@ -591,7 +594,9 @@ def indices_to_mask(
                     arg = int(arg)
                     if keepdim:
                         arg = slice(arg, arg + 1)
-        mask.insert(0, arg)
+        mask.append(arg)
+
+    mask.reverse()
 
     if num_tensors > 1:
         tensor_idx = 0
@@ -644,6 +649,7 @@ def qd_to_torch(
     else:
         tensor = qd_to_python(value, transpose, copy=copy, to_torch=True)
 
+    # Fast path: most common case has no masking — return early before mask processing
     if row_mask is None and col_mask is None:
         return tensor
 

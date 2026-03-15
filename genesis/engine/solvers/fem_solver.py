@@ -336,6 +336,11 @@ class FEMSolver(Solver):
         self._B = self.sim._B
         self.tet_wrong_order = qd.field(dtype=gs.qd_bool, shape=(), needs_grad=False)
 
+        # Cache coupler type check to avoid repeated isinstance() + import in hot substep loops
+        from genesis.engine.couplers import IPCCoupler
+
+        self._coupler_is_ipc = isinstance(self.sim._coupler, IPCCoupler)
+
         # batch fields
         self.init_batch_fields()
 
@@ -964,9 +969,7 @@ class FEMSolver(Solver):
     def substep_pre_coupling(self, f):
         if self.is_active:
             # Skip FEM solver step if using IPCCoupler (IPC handles FEM simulation)
-            from genesis.engine.couplers import IPCCoupler
-
-            if isinstance(self.sim._coupler, IPCCoupler):
+            if self._coupler_is_ipc:
                 pass  # IPC coupler handles FEM simulation
             elif self._use_implicit_solver:
                 self.precompute_material_data(f)
@@ -1041,13 +1044,15 @@ class FEMSolver(Solver):
 
     def add_grad_from_state(self, state):
         if self.is_active:
+            # Cache cur_substep_local to avoid repeated property chain
+            _f = self._sim.cur_substep_local
             if state.pos.grad is not None:
                 state.pos.assert_contiguous()
-                self._kernel_add_grad_from_pos(self._sim.cur_substep_local, state.pos.grad)
+                self._kernel_add_grad_from_pos(_f, state.pos.grad)
 
             if state.vel.grad is not None:
                 state.vel.assert_contiguous()
-                self._kernel_add_grad_from_vel(self._sim.cur_substep_local, state.vel.grad)
+                self._kernel_add_grad_from_vel(_f, state.vel.grad)
 
     def save_ckpt(self, ckpt_name):
         if self.is_active:
@@ -1061,14 +1066,16 @@ class FEMSolver(Solver):
                 0, self._ckpt[ckpt_name]["pos"], self._ckpt[ckpt_name]["vel"], self._ckpt[ckpt_name]["active"]
             )
 
-            self.copy_frame(self.sim.substeps_local, 0)
+            self.copy_frame(self._sim.substeps_local, 0)
 
     def load_ckpt(self, ckpt_name):
-        self.copy_frame(0, self._sim.substeps_local)
-        self.copy_grad(0, self._sim.substeps_local)
+        # Cache substeps_local to avoid repeated property chain
+        _substeps_local = self._sim.substeps_local
+        self.copy_frame(0, _substeps_local)
+        self.copy_grad(0, _substeps_local)
 
         if self._sim.requires_grad:
-            self.reset_grad_till_frame(self._sim.substeps_local)
+            self.reset_grad_till_frame(_substeps_local)
 
             self._kernel_set_state(
                 0,
