@@ -755,8 +755,9 @@ class PBDSolver(Solver):
     def substep_pre_coupling(self, f):
         if self.is_active:
             self._kernel_store_initial_pos(f)
-            # Cache cur_t locally to avoid property chain (self._sim → cur_t → multiplication) per substep
-            self._kernel_apply_external_force(f, self._sim._cur_substep_global * self._sim._substep_dt)
+            # Inline cur_t to avoid property chain (self._sim → cur_t → multiplication) per substep
+            _sim = self._sim
+            self._kernel_apply_external_force(f, _sim._cur_substep_global * _sim._substep_dt)
 
             # topology constraints (doesn't require spatial hashing)
             if self._n_edges > 0:
@@ -874,7 +875,8 @@ class PBDSolver(Solver):
 
     def update_render_fields(self):
         # Inline cur_substep_local to avoid property → method chain per render update
-        self._kernel_update_render_fields(self._sim._cur_substep_global % self._sim._substeps_local)
+        _sim = self._sim
+        self._kernel_update_render_fields(_sim._cur_substep_global % _sim._substeps_local)
 
     @qd.kernel
     def _kernel_update_render_fields(self, f: qd.i32):
