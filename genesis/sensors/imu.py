@@ -262,3 +262,6 @@ class IMUModel(BaseSensor):
 
     def get_observation(self) -> dict[str, Any]:
         return self._last_obs
+
+
+__all__ = ["IMUModel"]
