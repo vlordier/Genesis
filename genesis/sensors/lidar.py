@@ -364,3 +364,6 @@ class LidarModel(BaseSensor):
             blurred = _box1d(range_img, sigma_el, axis=0)
             blurred = _box1d(blurred, sigma_az, axis=1)
             return blurred.astype(np.float32)
+
+
+__all__ = ["LidarModel", "LidarPoint"]
