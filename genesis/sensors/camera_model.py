@@ -36,6 +36,42 @@ _FLOAT_CLIP_MIN: Final[float] = 0.0
 _DEFAULT_FULL_WELL_ELECTRONS: Final[float] = 3500.0
 
 
+def _bilinear_sample(channel: "FloatArray", xf: "FloatArray", yf: "FloatArray") -> "FloatArray":
+    """Bilinear interpolation of a 2-D single-channel image at fractional positions.
+
+    Parameters
+    ----------
+    channel:
+        2-D float32 array of shape ``(H, W)``.
+    xf, yf:
+        Float arrays of shape ``(H, W)`` holding the fractional sample
+        positions in pixel coordinates.  Out-of-bounds positions are
+        clamped to the image boundary (replication padding).
+
+    Returns
+    -------
+    FloatArray
+        Interpolated values, same shape as *channel*.
+    """
+    h, w = channel.shape
+    # Clamp to valid range
+    xf = np.clip(xf, 0.0, w - 1)
+    yf = np.clip(yf, 0.0, h - 1)
+
+    x0 = np.floor(xf).astype(np.int32)
+    y0 = np.floor(yf).astype(np.int32)
+    x1 = np.minimum(x0 + 1, w - 1)
+    y1 = np.minimum(y0 + 1, h - 1)
+
+    wx = (xf - x0).astype(np.float32)  # fractional x-weight
+    wy = (yf - y0).astype(np.float32)  # fractional y-weight
+
+    # Bilinear blend (vectorised, no loops)
+    top = (1.0 - wx) * channel[y0, x0] + wx * channel[y0, x1]
+    bot = (1.0 - wx) * channel[y1, x0] + wx * channel[y1, x1]
+    return ((1.0 - wy) * top + wy * bot).astype(np.float32)
+
+
 class CameraModel(BaseSensor):
     """
     Realistic RGB camera sensor model.
@@ -74,6 +110,15 @@ class CameraModel(BaseSensor):
     full_well_electrons:
         Full-well capacity at *base_iso* in electron counts.  Scales the
         Poisson shot-noise model.  Default is 3500 e-.
+    vignetting_strength:
+        Radial vignetting coefficient.  ``0`` = disabled; ``0.5`` = moderate
+        (corners ~25% dimmer); ``1.0`` = strong (corners ~50% dimmer).
+        Applied as a precomputed ``cos⁴``-like polynomial map.
+    chromatic_aberration_px:
+        Lateral chromatic aberration: maximum radial channel shift in pixels
+        at the image corner (0 = disabled).  Red shifts inward by
+        ``chromatic_aberration_px / 2`` pixels and blue shifts outward by the
+        same amount, relative to the green reference channel.
     seed:
         Optional seed for the random-number generator (reproducibility).
     """
@@ -93,6 +138,8 @@ class CameraModel(BaseSensor):
         hot_pixel_fraction: float = 0.00005,
         jpeg_quality: int = 0,
         full_well_electrons: float = _DEFAULT_FULL_WELL_ELECTRONS,
+        vignetting_strength: float = 0.0,
+        chromatic_aberration_px: float = 0.0,
         seed: int | None = None,
     ) -> None:
         super().__init__(name=name, update_rate_hz=update_rate_hz)
@@ -105,6 +152,8 @@ class CameraModel(BaseSensor):
         self.read_noise_sigma = float(read_noise_sigma)
         self.jpeg_quality = int(jpeg_quality)
         self.full_well_electrons = float(full_well_electrons)
+        self.vignetting_strength = float(max(0.0, vignetting_strength))
+        self.chromatic_aberration_px = float(max(0.0, chromatic_aberration_px))
 
         self.dead_pixel_fraction = float(dead_pixel_fraction)
         self.hot_pixel_fraction = float(hot_pixel_fraction)
@@ -166,6 +215,42 @@ class CameraModel(BaseSensor):
             except ImportError:
                 pass  # graceful degradation — distortion skipped
 
+        # ------------------------------------------------------------------
+        # Vignetting: precompute a (H, W, 1) multiplicative map.
+        # Uses a cos⁴-like polynomial model: v(r) = max(0, 1 − strength · r²)
+        # where r is the normalised radial distance (0 at centre, 1 at the
+        # farthest corner mid-point).  Precomputed at init and skipped when
+        # vignetting_strength == 0.
+        # ------------------------------------------------------------------
+        self._vignette_map: FloatArray | None = None
+        if self.vignetting_strength > 0.0:
+            xs = np.linspace(-1.0, 1.0, w, dtype=np.float32)
+            ys = np.linspace(-1.0, 1.0, h, dtype=np.float32)
+            xg, yg = np.meshgrid(xs, ys)  # (H, W)
+            r2: FloatArray = xg**2 + yg**2  # 0 at centre, 2 at corner
+            # Normalise so the farthest corner has r2 = 1 (at (1,1)).
+            r2_norm = r2 * 0.5
+            self._vignette_map = np.clip(1.0 - self.vignetting_strength * r2_norm, 0.0, 1.0).reshape(h, w, 1)
+
+        # ------------------------------------------------------------------
+        # Chromatic aberration: precompute normalised radial-direction arrays.
+        # During step() the red channel is shifted inward and the blue channel
+        # outward by chromatic_aberration_px pixels at the image corner.
+        # The green channel is the reference and is not shifted.
+        # ------------------------------------------------------------------
+        self._ca_dx: FloatArray | None = None
+        self._ca_dy: FloatArray | None = None
+        self._ca_r_max: float = 1.0
+        if self.chromatic_aberration_px > 0.0:
+            xs_ca = np.arange(w, dtype=np.float32) - (w - 1) * 0.5
+            ys_ca = np.arange(h, dtype=np.float32) - (h - 1) * 0.5
+            xg_ca, yg_ca = np.meshgrid(xs_ca, ys_ca)  # (H, W)
+            # Normalise so the corner has magnitude 1.
+            r_max = float(np.sqrt(((w - 1) * 0.5) ** 2 + ((h - 1) * 0.5) ** 2))
+            self._ca_r_max = r_max if r_max > 0 else 1.0
+            self._ca_dx = xg_ca / self._ca_r_max  # [-1, 1] approx
+            self._ca_dy = yg_ca / self._ca_r_max  # [-1, 1] approx
+
         self._last_obs: dict[str, Any] = {}
         self._prev_frame: FloatArray | None = None  # for rolling-shutter / blur
 
@@ -196,6 +281,8 @@ class CameraModel(BaseSensor):
             hot_pixel_fraction=self.hot_pixel_fraction,
             jpeg_quality=self.jpeg_quality,
             full_well_electrons=self.full_well_electrons,
+            vignetting_strength=self.vignetting_strength,
+            chromatic_aberration_px=self.chromatic_aberration_px,
         )
 
     # ------------------------------------------------------------------
@@ -237,6 +324,20 @@ class CameraModel(BaseSensor):
 
         # 4. Exposure / gain (use pre-computed scalar)
         img = np.clip(img * self._gain, _FLOAT_CLIP_MIN, _FLOAT_CLIP_MAX)
+
+        # 4a. Vignetting (applied after gain, before noise)
+        if self._vignette_map is not None:
+            h, w = img.shape[:2]
+            vm = self._vignette_map
+            if vm.shape[:2] != (h, w):
+                # Input resolution differs from configured — skip.
+                pass
+            else:
+                img = img * vm
+
+        # 4b. Lateral chromatic aberration (before noise so CA edges look natural)
+        if self._ca_dx is not None and self._ca_dy is not None:
+            img = self._apply_chromatic_aberration(img)
 
         # 5. Noise (Poisson shot + Gaussian read)
         img = self._apply_noise(img)
@@ -363,3 +464,38 @@ class CameraModel(BaseSensor):
             return rgb.astype(np.float32) / _UINT8_MAX
         except ImportError:
             return img
+
+    def _apply_chromatic_aberration(self, img: FloatArray) -> FloatArray:
+        """Apply lateral chromatic aberration by shifting R/B channels radially.
+
+        The green channel (index 1) is the reference and is unchanged.
+        The red channel is shifted *inward* by ``chromatic_aberration_px / 2``
+        pixels at the image corner; the blue channel is shifted *outward* by
+        the same amount.
+
+        Uses pure-NumPy bilinear interpolation so that cv2 is not required.
+        The precomputed ``_ca_dx``/``_ca_dy`` arrays hold normalised radial
+        direction vectors (magnitude 1 at the image corner).
+        """
+        assert self._ca_dx is not None and self._ca_dy is not None
+        h, w = img.shape[:2]
+        ca_h, ca_w = self._ca_dx.shape
+        if (h, w) != (ca_h, ca_w):
+            # Resolution differs from the precomputed maps — skip CA.
+            return img
+
+        half_shift = self.chromatic_aberration_px * 0.5
+
+        # Integer pixel grid
+        xi = np.arange(w, dtype=np.float32)
+        yi = np.arange(h, dtype=np.float32)
+        xg, yg = np.meshgrid(xi, yi)  # (H, W)
+
+        out = img.copy()
+        # channel 0 = red: shift inward (-half_shift)
+        # channel 2 = blue: shift outward (+half_shift)
+        for ch_idx, shift in ((0, -half_shift), (2, half_shift)):
+            xf = xg + shift * self._ca_dx
+            yf = yg + shift * self._ca_dy
+            out[..., ch_idx] = _bilinear_sample(img[..., ch_idx], xf, yf)
+        return out

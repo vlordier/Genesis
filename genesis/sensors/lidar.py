@@ -110,6 +110,12 @@ class LidarModel(BaseSensor):
     channel_offsets_m:
         Per-channel range offset in metres (calibration residuals).  If
         provided must have length ``n_channels``.
+    beam_divergence_mrad:
+        Half-angle beam divergence in milli-radians.  ``0`` = disabled; a
+        typical spinning LiDAR has 1.5–3.0 mrad.  Models the mixed-pixel
+        effect at surface edges by applying a Gaussian blur to the range
+        image before the noise pipeline, with sigma computed from the
+        divergence and the sensor's angular resolution.
     seed:
         Optional seed for the random-number generator (reproducibility).
     """
@@ -129,6 +135,7 @@ class LidarModel(BaseSensor):
         rain_rate_mm_h: float = 0.0,
         fog_density: float = 0.0,
         channel_offsets_m: list[float] | None = None,
+        beam_divergence_mrad: float = 0.0,
         seed: int | None = None,
     ) -> None:
         super().__init__(name=name, update_rate_hz=update_rate_hz)
@@ -142,6 +149,7 @@ class LidarModel(BaseSensor):
         self.dropout_prob = float(np.clip(dropout_prob, 0.0, 1.0))
         self.rain_rate_mm_h = float(rain_rate_mm_h)
         self.fog_density = float(fog_density)
+        self.beam_divergence_mrad = float(max(0.0, beam_divergence_mrad))
         self._rng = np.random.default_rng(seed=seed)
 
         if channel_offsets_m is not None:
@@ -172,6 +180,25 @@ class LidarModel(BaseSensor):
         self._cos_azim: FloatArray = np.cos(self._azim_grid).astype(np.float32)
         self._sin_azim: FloatArray = np.sin(self._azim_grid).astype(np.float32)
 
+        # ------------------------------------------------------------------
+        # Beam divergence: pre-compute the Gaussian blur sigma (pixels) in
+        # azimuth and elevation from the divergence and angular resolution.
+        # σ_az = beam_divergence_mrad / az_resolution_mrad
+        # σ_el = beam_divergence_mrad / el_resolution_mrad
+        # A minimum sigma of 0.5 is enforced so even very fine angular
+        # resolution still produces some mixed-pixel softening.
+        # ------------------------------------------------------------------
+        self._bd_sigma_az: float = 0.0
+        self._bd_sigma_el: float = 0.0
+        if self.beam_divergence_mrad > 0.0 and self.n_channels > 1:
+            import math
+
+            az_res_mrad = 360.0 / self.h_resolution * (math.pi / 180.0) * 1000.0
+            el_span_mrad = abs(self.v_fov_deg[1] - self.v_fov_deg[0]) * (math.pi / 180.0) * 1000.0
+            el_res_mrad = el_span_mrad / max(self.n_channels - 1, 1)
+            self._bd_sigma_az = max(self.beam_divergence_mrad / az_res_mrad, 0.5)
+            self._bd_sigma_el = max(self.beam_divergence_mrad / el_res_mrad, 0.5)
+
         self._last_obs: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
@@ -201,6 +228,7 @@ class LidarModel(BaseSensor):
             rain_rate_mm_h=self.rain_rate_mm_h,
             fog_density=self.fog_density,
             channel_offsets_m=list(self._channel_offsets) if self._channel_offsets_m_given else None,
+            beam_divergence_mrad=self.beam_divergence_mrad,
         )
 
     # ------------------------------------------------------------------
@@ -228,6 +256,12 @@ class LidarModel(BaseSensor):
 
         range_img = np.asarray(range_img, dtype=np.float32)
         n_ch, n_az = range_img.shape
+
+        # 0. Beam divergence: Gaussian blur models mixed-pixel / edge-bleeding
+        #    effect caused by finite beam solid angle.  Only applied when
+        #    beam_divergence_mrad > 0 and the sigmas were pre-computed.
+        if self._bd_sigma_az > 0.0:
+            range_img = self._apply_beam_divergence(range_img)
 
         intensity_img = state.get("intensity_image")
         if intensity_img is not None:
@@ -300,3 +334,34 @@ class LidarModel(BaseSensor):
 
     def get_observation(self) -> dict[str, Any]:
         return self._last_obs
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _apply_beam_divergence(self, range_img: "FloatArray") -> "FloatArray":
+        """Apply a separable Gaussian blur to model beam-divergence mixed pixels.
+
+        The sigma is pre-computed at init from ``beam_divergence_mrad`` and the
+        sensor's angular resolution.  Uses scipy when available (exact Gaussian)
+        and falls back to numpy separable 1-D box-filter convolutions otherwise.
+        """
+        # Clamp sigma to at most half the image dimension to avoid edge artefacts.
+        n_ch, n_az = range_img.shape
+        sigma_el = min(self._bd_sigma_el, (n_ch - 1) * 0.5)
+        sigma_az = min(self._bd_sigma_az, (n_az - 1) * 0.5)
+
+        try:
+            from scipy.ndimage import gaussian_filter
+
+            return gaussian_filter(range_img, sigma=(sigma_el, sigma_az)).astype(np.float32)
+        except ImportError:
+            # Separable 1-D box-filter approximation.
+            def _box1d(arr: "FloatArray", sigma: float, axis: int) -> "FloatArray":
+                k = max(1, int(sigma * 2 + 1))
+                kernel = np.ones(k, dtype=np.float32) / k
+                return np.apply_along_axis(lambda r: np.convolve(r, kernel, mode="same"), axis=axis, arr=arr)
+
+            blurred = _box1d(range_img, sigma_el, axis=0)
+            blurred = _box1d(blurred, sigma_az, axis=1)
+            return blurred.astype(np.float32)

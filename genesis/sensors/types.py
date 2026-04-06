@@ -106,6 +106,10 @@ class SensorState(TypedDict, total=False):
     vel: Float64Array  # shape (3,) m/s ENU
     ang_vel: FloatArray  # shape (3,) rad/s
 
+    # IMU
+    lin_acc: Float64Array  # shape (3,) body-frame linear acceleration (m/s²), no gravity
+    gravity_body: Float64Array  # shape (3,) gravity vector in body frame (m/s²)
+
     # LiDAR
     range_image: FloatArray  # shape (n_channels, h_resolution), metres
     intensity_image: FloatArray  # shape (n_channels, h_resolution), [0, 1]
@@ -116,6 +120,18 @@ class SensorState(TypedDict, total=False):
     # Environment
     obstruction: float  # 0–1 sky-hemisphere obstruction fraction
     weather: dict[str, float]  # e.g. {"rain_rate_mm_h": 5.0}
+
+
+# ---------------------------------------------------------------------------
+# IMU model
+# ---------------------------------------------------------------------------
+
+
+class ImuObservation(TypedDict):
+    """Observation emitted by :class:`~genesis.sensors.IMUModel`."""
+
+    lin_acc: Float64Array  # shape (3,) — noisy specific force (m/s²); includes gravity when add_gravity=True
+    ang_vel: Float64Array  # shape (3,) — noisy angular velocity (rad/s)
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +224,7 @@ __all__ = [
     "CameraObservation",
     "EventCameraObservation",
     "GnssObservation",
+    "ImuObservation",
     "LidarObservation",
     "RadioObservation",
     "ThermalObservation",

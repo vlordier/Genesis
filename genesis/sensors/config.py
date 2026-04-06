@@ -53,6 +53,16 @@ class CameraConfig(BaseModel):
     hot_pixel_fraction: float = Field(default=0.00005, ge=0.0, le=1.0, description="Fraction of hot pixels.")
     jpeg_quality: int = Field(default=0, ge=0, le=100, description="JPEG quality (0 = disabled).")
     full_well_electrons: float = Field(default=3500.0, gt=0, description="Full-well capacity at base_iso (electrons).")
+    vignetting_strength: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Radial vignetting strength (0 = off, 0.5 = moderate, 1.0 = strong).",
+    )
+    chromatic_aberration_px: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Lateral chromatic aberration: max channel shift in pixels at image corner (0 = off).",
+    )
     seed: int | None = Field(default=None, description="RNG seed for reproducibility.")
 
     @field_validator("resolution")
@@ -148,6 +158,11 @@ class LidarConfig(BaseModel):
     rain_rate_mm_h: float = Field(default=0.0, ge=0.0, description="Rain rate for two-way attenuation (mm/h).")
     fog_density: float = Field(default=0.0, ge=0.0, description="Fog extinction coefficient (1/m).")
     channel_offsets_m: list[float] | None = Field(default=None, description="Per-channel calibration offsets (m).")
+    beam_divergence_mrad: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Half-angle beam divergence (mrad).  0 = off; typical spinning LiDAR: 1.5–3.0 mrad.",
+    )
     seed: int | None = None
 
     @model_validator(mode="after")
@@ -215,6 +230,41 @@ class RadioConfig(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# IMUConfig
+# ---------------------------------------------------------------------------
+
+
+class IMUConfig(BaseModel):
+    """Configuration for :class:`~genesis.sensors.IMUModel`."""
+
+    name: str = "imu"
+    update_rate_hz: float = Field(default=200.0, gt=0, description="IMU output rate (Hz).")
+    noise_density_acc: float = Field(
+        default=2.0e-3,
+        gt=0,
+        description="Accelerometer white-noise density (m/s²/√Hz).  Typical MEMS: 2–5 × 10⁻³.",
+    )
+    noise_density_gyr: float = Field(
+        default=1.7e-4,
+        gt=0,
+        description="Gyroscope white-noise density (rad/s/√Hz).  Typical MEMS: 1–5 × 10⁻⁴.",
+    )
+    bias_tau_acc_s: float = Field(default=300.0, gt=0, description="Accelerometer bias correlation time (s).")
+    bias_sigma_acc: float = Field(default=5.0e-3, ge=0.0, description="Steady-state accelerometer bias sigma (m/s²).")
+    bias_tau_gyr_s: float = Field(default=300.0, gt=0, description="Gyroscope bias correlation time (s).")
+    bias_sigma_gyr: float = Field(default=1.0e-4, ge=0.0, description="Steady-state gyroscope bias sigma (rad/s).")
+    scale_factor_acc: float = Field(
+        default=0.0, ge=-1.0, description="Relative accelerometer scale-factor error (≥ −1)."
+    )
+    scale_factor_gyr: float = Field(default=0.0, ge=-1.0, description="Relative gyroscope scale-factor error (≥ −1).")
+    add_gravity: bool = Field(
+        default=True,
+        description="Add gravity vector (from state['gravity_body']) to acceleration, mimicking specific-force output.",
+    )
+    seed: int | None = None
+
+
+# ---------------------------------------------------------------------------
 # SensorSuiteConfig
 # ---------------------------------------------------------------------------
 
@@ -247,16 +297,24 @@ class SensorSuiteConfig(BaseModel):
     lidar: LidarConfig | None = Field(default_factory=LidarConfig, description="LiDAR (None = disabled).")
     gnss: GNSSConfig | None = Field(default_factory=GNSSConfig, description="GNSS (None = disabled).")
     radio: RadioConfig | None = Field(default_factory=RadioConfig, description="Radio link (None = disabled).")
+    imu: IMUConfig | None = Field(default_factory=IMUConfig, description="IMU (None = disabled).")
 
     @classmethod
     def minimal(cls) -> "SensorSuiteConfig":
         """Return a config with only GNSS enabled (lightest default)."""
-        return cls(rgb=None, event=None, thermal=None, lidar=None, radio=None)
+        return cls(
+            rgb=None,
+            event=None,
+            thermal=None,
+            lidar=None,
+            radio=None,
+            imu=None,
+        )
 
     @classmethod
     def all_disabled(cls) -> "SensorSuiteConfig":
         """Return a config with every sensor disabled."""
-        return cls(rgb=None, event=None, thermal=None, lidar=None, gnss=None, radio=None)
+        return cls(rgb=None, event=None, thermal=None, lidar=None, gnss=None, radio=None, imu=None)
 
     @classmethod
     def full(cls) -> "SensorSuiteConfig":
@@ -268,6 +326,7 @@ class SensorSuiteConfig(BaseModel):
             lidar=LidarConfig(),
             gnss=GNSSConfig(),
             radio=RadioConfig(),
+            imu=IMUConfig(),
         )
 
 
@@ -275,6 +334,7 @@ __all__ = [
     "CameraConfig",
     "EventCameraConfig",
     "GNSSConfig",
+    "IMUConfig",
     "LidarConfig",
     "RadioConfig",
     "SensorSuiteConfig",

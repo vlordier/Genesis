@@ -52,6 +52,7 @@ from .config import (
     CameraConfig,
     EventCameraConfig,
     GNSSConfig,
+    IMUConfig,
     LidarConfig,
     RadioConfig,
     SensorSuiteConfig,
@@ -59,6 +60,7 @@ from .config import (
 )
 from .event_camera import Event, EventCameraModel
 from .gnss import GNSSModel, GnssFixQuality
+from .imu import IMUModel
 from .lidar import LidarModel, LidarPoint
 from .radio import RadioLinkModel, ScheduledPacket
 from .scheduler import SensorScheduler
@@ -71,6 +73,7 @@ from .types import (
     Float64Array,
     FloatArray,
     GnssObservation,
+    ImuObservation,
     Int32Array,
     JammerZone,
     LidarObservation,
@@ -90,6 +93,7 @@ __all__ = [
     "EventCameraModel",
     "GNSSModel",
     "GnssFixQuality",
+    "IMUModel",
     "LidarModel",
     "LidarPoint",
     "RadioLinkModel",
@@ -101,6 +105,7 @@ __all__ = [
     "CameraConfig",
     "EventCameraConfig",
     "GNSSConfig",
+    "IMUConfig",
     "LidarConfig",
     "RadioConfig",
     "SensorSuiteConfig",
@@ -112,6 +117,7 @@ __all__ = [
     "Float64Array",
     "FloatArray",
     "GnssObservation",
+    "ImuObservation",
     "Int32Array",
     "JammerZone",
     "LidarObservation",

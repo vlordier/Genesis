@@ -53,6 +53,7 @@ from typing import TYPE_CHECKING, Any
 from .camera_model import CameraModel
 from .event_camera import EventCameraModel
 from .gnss import GNSSModel
+from .imu import IMUModel
 from .lidar import LidarModel
 from .radio import RadioLinkModel
 from .scheduler import SensorScheduler
@@ -81,6 +82,8 @@ class SensorSuite:
         :class:`~genesis.sensors.gnss.GNSSModel` instance.
     radio:
         :class:`~genesis.sensors.radio.RadioLinkModel` instance.
+    imu:
+        :class:`~genesis.sensors.imu.IMUModel` instance.
     extra_sensors:
         Additional ``(name, BaseSensor)`` pairs to register.
     """
@@ -93,6 +96,7 @@ class SensorSuite:
         lidar: LidarModel | None = None,
         gnss: GNSSModel | None = None,
         radio: RadioLinkModel | None = None,
+        imu: IMUModel | None = None,
         extra_sensors: list[tuple[str, BaseSensor]] | None = None,
     ) -> None:
         self._scheduler = SensorScheduler()
@@ -109,6 +113,8 @@ class SensorSuite:
             self._scheduler.add(gnss, name="gnss")
         if radio is not None:
             self._scheduler.add(radio, name="radio")
+        if imu is not None:
+            self._scheduler.add(imu, name="imu")
 
         for name, sensor in extra_sensors or []:
             self._scheduler.add(sensor, name=name)
@@ -126,6 +132,7 @@ class SensorSuite:
         lidar_rate_hz: float = 10.0,
         gnss_rate_hz: float = 10.0,
         radio_rate_hz: float = 100.0,
+        imu_rate_hz: float = 200.0,
     ) -> SensorSuite:
         """
         Create a :class:`SensorSuite` with default sensor configurations.
@@ -147,6 +154,8 @@ class SensorSuite:
             GNSS output rate.
         radio_rate_hz:
             Radio link scheduler poll rate.
+        imu_rate_hz:
+            IMU output rate.
         """
         return cls(
             rgb_camera=CameraModel(update_rate_hz=rgb_rate_hz) if rgb_rate_hz > 0 else None,
@@ -155,6 +164,7 @@ class SensorSuite:
             lidar=LidarModel(update_rate_hz=lidar_rate_hz) if lidar_rate_hz > 0 else None,
             gnss=GNSSModel(update_rate_hz=gnss_rate_hz) if gnss_rate_hz > 0 else None,
             radio=RadioLinkModel(update_rate_hz=radio_rate_hz) if radio_rate_hz > 0 else None,
+            imu=IMUModel(update_rate_hz=imu_rate_hz) if imu_rate_hz > 0 else None,
         )
 
     @classmethod
@@ -181,6 +191,7 @@ class SensorSuite:
             lidar=LidarModel.from_config(config.lidar) if config.lidar is not None else None,
             gnss=GNSSModel.from_config(config.gnss) if config.gnss is not None else None,
             radio=RadioLinkModel.from_config(config.radio) if config.radio is not None else None,
+            imu=IMUModel.from_config(config.imu) if config.imu is not None else None,
         )
 
     # ------------------------------------------------------------------

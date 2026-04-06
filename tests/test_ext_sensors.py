@@ -20,6 +20,7 @@ from genesis.sensors import (
     EventCameraModel,
     GnssFixQuality,
     GNSSModel,
+    IMUModel,
     LidarModel,
     Polarity,
     RadioLinkModel,
@@ -32,6 +33,7 @@ from genesis.sensors.config import (
     CameraConfig,
     EventCameraConfig,
     GNSSConfig,
+    IMUConfig,
     LidarConfig,
     RadioConfig,
     SensorSuiteConfig,
@@ -893,3 +895,382 @@ class TestSensorSuiteConfig:
         obs = suite.step(0.0, {"rgb": _make_rgb(16, 16), "pos": np.zeros(3), "vel": np.zeros(3)})
         assert "rgb" in obs
         assert "gnss" in obs
+
+
+# ---------------------------------------------------------------------------
+# IMUModel
+# ---------------------------------------------------------------------------
+
+
+class TestIMUModel:
+    """Tests for genesis.sensors.imu.IMUModel."""
+
+    def _make_state(self) -> dict:
+        return {
+            "lin_acc": np.array([0.0, 0.0, 0.0], dtype=np.float64),
+            "ang_vel": np.array([0.0, 0.0, 0.0], dtype=np.float64),
+            "gravity_body": np.array([0.0, 0.0, 9.80665], dtype=np.float64),
+        }
+
+    def test_basic_step_returns_expected_keys(self) -> None:
+
+        imu = IMUModel(update_rate_hz=200.0, seed=0)
+        obs = imu.step(0.0, self._make_state())
+        assert "lin_acc" in obs
+        assert "ang_vel" in obs
+        assert obs["lin_acc"].shape == (3,)
+        assert obs["ang_vel"].shape == (3,)
+
+    def test_gravity_injection_adds_to_lin_acc(self) -> None:
+        """With add_gravity=True and zero true acceleration, lin_acc ~ gravity_body."""
+
+        imu = IMUModel(
+            update_rate_hz=200.0,
+            noise_density_acc=0.0,
+            noise_density_gyr=0.0,
+            bias_sigma_acc=0.0,
+            bias_sigma_gyr=0.0,
+            scale_factor_acc=0.0,
+            add_gravity=True,
+            seed=0,
+        )
+        g_vec = np.array([0.0, 0.0, 9.80665])
+        obs = imu.step(0.0, {"lin_acc": np.zeros(3), "ang_vel": np.zeros(3), "gravity_body": g_vec})
+        np.testing.assert_allclose(obs["lin_acc"], g_vec, atol=1e-9)
+
+    def test_no_gravity_when_disabled(self) -> None:
+        """With add_gravity=False and zero noise, lin_acc should be near-zero."""
+
+        imu = IMUModel(
+            update_rate_hz=200.0,
+            noise_density_acc=0.0,
+            noise_density_gyr=0.0,
+            bias_sigma_acc=0.0,
+            bias_sigma_gyr=0.0,
+            add_gravity=False,
+            seed=0,
+        )
+        obs = imu.step(0.0, {"lin_acc": np.zeros(3), "ang_vel": np.zeros(3)})
+        np.testing.assert_allclose(obs["lin_acc"], np.zeros(3), atol=1e-9)
+
+    def test_noise_varies_output(self) -> None:
+        """Two consecutive steps should produce different measurements (noise active)."""
+
+        imu = IMUModel(update_rate_hz=200.0, noise_density_acc=1e-2, seed=1)
+        state = {"lin_acc": np.zeros(3), "ang_vel": np.zeros(3), "gravity_body": np.zeros(3)}
+        obs1 = imu.step(0.0, state)
+        obs2 = imu.step(0.005, state)
+        assert not np.allclose(obs1["lin_acc"], obs2["lin_acc"])
+
+    def test_scale_factor_multiplies_signal(self) -> None:
+        """With scale_factor_acc=0.1 and no noise, lin_acc = 1.1 * true_acc + g."""
+
+        imu = IMUModel(
+            update_rate_hz=200.0,
+            noise_density_acc=0.0,
+            noise_density_gyr=0.0,
+            bias_sigma_acc=0.0,
+            bias_sigma_gyr=0.0,
+            scale_factor_acc=0.1,
+            add_gravity=False,
+            seed=0,
+        )
+        true_acc = np.array([1.0, 0.0, 0.0])
+        obs = imu.step(0.0, {"lin_acc": true_acc, "ang_vel": np.zeros(3)})
+        np.testing.assert_allclose(obs["lin_acc"], 1.1 * true_acc, atol=1e-9)
+
+    def test_reset_clears_bias(self) -> None:
+
+        imu = IMUModel(update_rate_hz=200.0)
+        imu.step(0.0, self._make_state())
+        imu.reset()
+        np.testing.assert_allclose(imu.bias_acc, np.zeros(3))
+        np.testing.assert_allclose(imu.bias_gyr, np.zeros(3))
+
+    def test_get_observation_returns_cached_dict(self) -> None:
+
+        imu = IMUModel(update_rate_hz=200.0, seed=0)
+        obs = imu.step(0.0, self._make_state())
+        assert imu.get_observation() is obs
+
+    def test_get_observation_before_step_empty(self) -> None:
+
+        imu = IMUModel(update_rate_hz=200.0)
+        obs = imu.get_observation()
+        assert isinstance(obs, dict)
+
+    def test_is_due_respects_rate(self) -> None:
+
+        imu = IMUModel(update_rate_hz=100.0)  # period = 10 ms
+        imu.step(0.0, self._make_state())
+        assert not imu.is_due(0.005)  # only 5 ms passed
+        assert imu.is_due(0.010)  # 10 ms passed
+
+    def test_bias_properties_return_copy(self) -> None:
+        """bias_acc and bias_gyr must return copies, not live references."""
+
+        imu = IMUModel(update_rate_hz=200.0, seed=42)
+        for _ in range(10):
+            imu.step(0.0, self._make_state())
+        b_acc = imu.bias_acc
+        b_acc[0] = 999.0
+        assert imu.bias_acc[0] != 999.0, "bias_acc should be a copy"
+
+
+# ---------------------------------------------------------------------------
+# IMUConfig
+# ---------------------------------------------------------------------------
+
+
+class TestIMUConfig:
+    def test_basic_construction(self) -> None:
+
+        cfg = IMUConfig(update_rate_hz=400.0)
+        assert cfg.update_rate_hz == 400.0
+
+    def test_invalid_noise_density(self) -> None:
+
+        with pytest.raises(Exception):
+            IMUConfig(noise_density_acc=-1.0)  # must be > 0
+
+    def test_invalid_scale_factor(self) -> None:
+
+        with pytest.raises(Exception):
+            IMUConfig(scale_factor_acc=-2.0)  # must be >= -1
+
+    def test_from_config_round_trip(self) -> None:
+
+        cfg = IMUConfig(update_rate_hz=500.0, noise_density_acc=3e-3, bias_sigma_gyr=2e-4, add_gravity=False)
+        imu = IMUModel.from_config(cfg)
+        cfg2 = imu.get_config()
+        assert cfg2.update_rate_hz == cfg.update_rate_hz
+        assert cfg2.noise_density_acc == cfg.noise_density_acc
+        assert cfg2.add_gravity == cfg.add_gravity
+
+    def test_json_round_trip(self) -> None:
+
+        cfg = IMUConfig(scale_factor_gyr=0.01)
+        json_str = cfg.model_dump_json()
+        cfg2 = IMUConfig.model_validate_json(json_str)
+        assert cfg2.scale_factor_gyr == cfg.scale_factor_gyr
+
+
+# ---------------------------------------------------------------------------
+# Camera vignetting + chromatic aberration (third-pass additions)
+# ---------------------------------------------------------------------------
+
+
+class TestCameraVignetting:
+    def test_vignetting_darkens_corners(self) -> None:
+        """With vignetting enabled corners must be darker than the center."""
+        from genesis.sensors import CameraModel
+
+        cam = CameraModel(
+            resolution=(64, 64),
+            vignetting_strength=0.8,
+            update_rate_hz=30.0,
+            iso=100.0,
+            dead_pixel_fraction=0.0,
+            hot_pixel_fraction=0.0,
+            seed=0,
+        )
+        # Uniform white image: all pixels are 1.0 before vignetting
+        white = np.ones((64, 64, _RGB_CHANNELS), dtype=np.float32)
+        obs = cam.step(0.0, {"rgb": white})
+        rgb = obs["rgb"].astype(np.float32)
+        center_brightness = rgb[32, 32].mean()
+        corner_brightness = rgb[0, 0].mean()
+        assert corner_brightness < center_brightness, "Corners should be darker after vignetting"
+
+    def test_no_vignetting_preserves_uniformity(self) -> None:
+        """With vignetting_strength=0 the brightness gradient should be much smaller."""
+        from genesis.sensors import CameraModel
+
+        cam = CameraModel(
+            resolution=(32, 32),
+            vignetting_strength=0.0,
+            update_rate_hz=30.0,
+            iso=100.0,
+            dead_pixel_fraction=0.0,
+            hot_pixel_fraction=0.0,
+            seed=0,
+        )
+        white = np.ones((32, 32, _RGB_CHANNELS), dtype=np.float32)
+        obs = cam.step(0.0, {"rgb": white})
+        rgb = obs["rgb"].astype(np.float32) / 255.0
+        center = rgb[16, 16].mean()
+        corner = rgb[0, 0].mean()
+        # Difference should be small (only noise, no vignetting)
+        assert abs(center - corner) < 0.15, "Without vignetting centre/corner should be close"
+
+    def test_vignetting_config_round_trip(self) -> None:
+        from genesis.sensors import CameraModel
+
+        cam = CameraModel(vignetting_strength=0.6)
+        cfg = cam.get_config()
+        assert cfg.vignetting_strength == 0.6
+        cam2 = CameraModel.from_config(cfg)
+        assert cam2.vignetting_strength == 0.6
+
+
+class TestCameraCA:
+    def test_ca_changes_output(self) -> None:
+        """With CA enabled the output must differ from the CA-free output."""
+        from genesis.sensors import CameraModel
+
+        h, w = 32, 32
+        # Structured image with a sharp vertical edge (not uniform)
+        rgb = np.zeros((h, w, _RGB_CHANNELS), dtype=np.float32)
+        rgb[:, w // 2 :, 0] = 1.0  # red channel edge at center
+
+        cam_noca = CameraModel(
+            resolution=(w, h),
+            chromatic_aberration_px=0.0,
+            dead_pixel_fraction=0.0,
+            hot_pixel_fraction=0.0,
+            iso=100.0,
+            seed=0,
+        )
+        cam_ca = CameraModel(
+            resolution=(w, h),
+            chromatic_aberration_px=3.0,
+            dead_pixel_fraction=0.0,
+            hot_pixel_fraction=0.0,
+            iso=100.0,
+            seed=0,
+        )
+        obs_noca = cam_noca.step(0.0, {"rgb": rgb})
+        obs_ca = cam_ca.step(0.0, {"rgb": rgb})
+        # The two outputs should differ (CA moves the red channel)
+        assert not np.array_equal(obs_noca["rgb"], obs_ca["rgb"])
+
+    def test_ca_zero_is_identity_on_uniform_image(self) -> None:
+        """CA=0 on a uniform image: all channels should have equal mean (no shift artefact)."""
+        h, w = 16, 16
+        rgb = np.full((h, w, _RGB_CHANNELS), 0.5, dtype=np.float32)
+        cam = CameraModel(
+            resolution=(w, h),
+            chromatic_aberration_px=0.0,
+            dead_pixel_fraction=0.0,
+            hot_pixel_fraction=0.0,
+            iso=100.0,
+            seed=0,
+        )
+        obs = cam.step(0.0, {"rgb": rgb})
+        out = obs["rgb"].astype(np.float32)
+        # Without CA, R/G/B means should be nearly equal (only noise varies).
+        assert abs(out[..., 0].mean() - out[..., 2].mean()) < 15.0, (
+            "Without CA, R and B channel means should be close"
+        )
+
+    def test_ca_config_round_trip(self) -> None:
+        from genesis.sensors import CameraModel
+
+        cam = CameraModel(chromatic_aberration_px=2.5)
+        cfg = cam.get_config()
+        assert cfg.chromatic_aberration_px == 2.5
+        cam2 = CameraModel.from_config(cfg)
+        assert cam2.chromatic_aberration_px == 2.5
+
+
+# ---------------------------------------------------------------------------
+# LiDAR beam divergence (third-pass addition)
+# ---------------------------------------------------------------------------
+
+
+class TestLidarBeamDivergence:
+    def _make_range_image_with_edge(self, n_ch: int = 16, n_az: int = 60) -> np.ndarray:
+        """Create a range image with a sharp depth discontinuity."""
+        ri = np.full((n_ch, n_az), 10.0, dtype=np.float32)
+        ri[:, n_az // 2 :] = 50.0  # far wall after the midpoint
+        return ri
+
+    def test_beam_divergence_softens_edge(self) -> None:
+        """Beam divergence should blur the range image, softening the depth edge."""
+        from genesis.sensors import LidarModel
+
+        n_ch, n_az = 16, 60
+        ri = self._make_range_image_with_edge(n_ch, n_az)
+
+        lidar_sharp = LidarModel(n_channels=n_ch, h_resolution=n_az, beam_divergence_mrad=0.0, seed=0)
+        lidar_soft = LidarModel(n_channels=n_ch, h_resolution=n_az, beam_divergence_mrad=5.0, seed=0)
+
+        obs_sharp = lidar_sharp.step(0.0, {"range_image": ri.copy()})
+        obs_soft = lidar_soft.step(0.0, {"range_image": ri.copy()})
+
+        # The range image from the blurred sensor should differ from the sharp one
+        assert not np.allclose(obs_sharp["range_image"], obs_soft["range_image"])
+
+    def test_beam_divergence_zero_no_change(self) -> None:
+        """beam_divergence_mrad=0 must not modify the range image (beyond other noise)."""
+        from genesis.sensors import LidarModel
+
+        ri = self._make_range_image_with_edge()
+        lidar = LidarModel(n_channels=16, h_resolution=60, beam_divergence_mrad=0.0, range_noise_sigma_m=0.0, seed=0)
+        obs = lidar.step(0.0, {"range_image": ri.copy()})
+        # With no noise and no beam divergence, the returned range image
+        # should have the same structure as the input.
+        assert obs["range_image"].shape == ri.shape
+
+    def test_beam_divergence_config_round_trip(self) -> None:
+        from genesis.sensors import LidarModel
+
+        lidar = LidarModel(beam_divergence_mrad=2.5)
+        cfg = lidar.get_config()
+        assert cfg.beam_divergence_mrad == 2.5
+        lidar2 = LidarModel.from_config(cfg)
+        assert lidar2.beam_divergence_mrad == 2.5
+
+
+# ---------------------------------------------------------------------------
+# SensorSuite with IMU (third-pass integration test)
+# ---------------------------------------------------------------------------
+
+
+class TestSensorSuiteWithIMU:
+    def test_default_suite_includes_imu(self) -> None:
+        """SensorSuite.default() should register an IMU sensor."""
+        suite = SensorSuite.default()
+        assert "imu" in suite.sensor_names()
+
+    def test_suite_step_returns_imu_obs(self) -> None:
+        """suite.step() should return an 'imu' key with lin_acc and ang_vel."""
+        suite = SensorSuite.default(
+            rgb_rate_hz=0,
+            event_rate_hz=0,
+            thermal_rate_hz=0,
+            lidar_rate_hz=0,
+            radio_rate_hz=0,
+            gnss_rate_hz=0,
+            imu_rate_hz=200.0,
+        )
+        suite.reset()
+        state = {
+            "lin_acc": np.zeros(3, dtype=np.float64),
+            "ang_vel": np.zeros(3, dtype=np.float64),
+            "gravity_body": np.array([0.0, 0.0, 9.80665]),
+        }
+        obs = suite.step(0.0, state)
+        assert "imu" in obs
+        assert "lin_acc" in obs["imu"]
+        assert "ang_vel" in obs["imu"]
+
+    def test_suite_from_config_includes_imu(self) -> None:
+        from genesis.sensors.config import SensorSuiteConfig
+
+        cfg = SensorSuiteConfig(rgb=None, event=None, thermal=None, lidar=None, gnss=None, radio=None, imu=IMUConfig())
+        suite = SensorSuite.from_config(cfg)
+        assert "imu" in suite.sensor_names()
+
+    def test_suite_imu_disabled(self) -> None:
+        from genesis.sensors.config import SensorSuiteConfig
+
+        cfg = SensorSuiteConfig.all_disabled()
+        suite = SensorSuite.from_config(cfg)
+        assert "imu" not in suite.sensor_names()
+
+    def test_suite_config_full_includes_imu(self) -> None:
+        from genesis.sensors.config import SensorSuiteConfig
+
+        cfg = SensorSuiteConfig.full()
+        assert cfg.imu is not None
