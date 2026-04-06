@@ -25,11 +25,37 @@ Usage
 
 from __future__ import annotations
 
-from typing import Any
+from enum import IntEnum
+from typing import Any, Final
 
 import numpy as np
 
 from .base import BaseSensor
+
+# Physical constants
+_EARTH_RADIUS_M: Final[float] = 6_378_137.0
+# Fallback HDOP reported when there is no fix or inside a jammer zone.
+_HDOP_NO_FIX: Final[float] = 99.9
+# Nominal satellites visible at zero obstruction.
+_BASE_SATELLITES: Final[int] = 8
+# Number of satellites lost per unit obstruction fraction.
+_SAT_LOSS_PER_OBSTRUCTION: Final[int] = 6
+# Maximum satellite count (clamp upper bound).
+_MAX_SATELLITES: Final[int] = 12
+# HDOP slope as a function of obstruction fraction.
+_HDOP_OBSTRUCTION_SLOPE: Final[float] = 2.5
+# Minimum HDOP (ideal open sky).
+_HDOP_MIN: Final[float] = 1.0
+# Maximum HDOP (very degraded).
+_HDOP_MAX: Final[float] = 10.0
+
+
+class GnssFixQuality(IntEnum):
+    """NMEA GGA fix-quality indicator values."""
+
+    NO_FIX = 0
+    AUTONOMOUS = 1
+    RTK = 4
 
 
 class GNSSModel(BaseSensor):
@@ -41,7 +67,7 @@ class GNSSModel(BaseSensor):
     name:
         Human-readable identifier.
     update_rate_hz:
-        Output rate in Hz (typically 1–10 Hz for GPS, up to ~50 Hz for RTK).
+        Output rate in Hz (typically 1-10 Hz for GPS, up to ~50 Hz for RTK).
     noise_m:
         1-sigma Gaussian position noise in metres (horizontal and vertical).
     vel_noise_ms:
@@ -57,15 +83,13 @@ class GNSSModel(BaseSensor):
         Altitude (metres above ground) below which fix quality degrades.
     jammer_zones:
         List of ``(centre_xyz, radius_m)`` tuples; if the drone is inside
-        any zone the output ``fix_quality`` is set to 0 (no fix).
+        any zone the output ``fix_quality`` is set to ``GnssFixQuality.NO_FIX``.
     origin_llh:
         ``(lat_deg, lon_deg, alt_m)`` of the simulation world origin.
         Used to convert XYZ to lat/lon/height.
+    seed:
+        Optional seed for the random-number generator (reproducibility).
     """
-
-    FIX_NO_FIX = 0
-    FIX_AUTONOMOUS = 1
-    FIX_RTK = 4
 
     def __init__(
         self,
@@ -77,8 +101,9 @@ class GNSSModel(BaseSensor):
         bias_sigma_m: float = 0.5,
         multipath_sigma_m: float = 1.0,
         min_fix_altitude_m: float = 0.5,
-        jammer_zones: list[tuple[np.ndarray, float]] | None = None,
+        jammer_zones: list[tuple[Any, float]] | None = None,
         origin_llh: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        seed: int | None = None,
     ) -> None:
         super().__init__(name=name, update_rate_hz=update_rate_hz)
         self.noise_m = float(noise_m)
@@ -87,16 +112,25 @@ class GNSSModel(BaseSensor):
         self.bias_sigma_m = float(bias_sigma_m)
         self.multipath_sigma_m = float(multipath_sigma_m)
         self.min_fix_altitude_m = float(min_fix_altitude_m)
-        self.jammer_zones: list[tuple[np.ndarray, float]] = jammer_zones or []
+        self.jammer_zones: list[tuple[Any, float]] = jammer_zones or []
         self.origin_llh = tuple(origin_llh)
+        self._rng = np.random.default_rng(seed=seed)
 
-        # Earth radius and degrees-per-metre factors
-        self._R_earth = 6_378_137.0
-        self._m_per_deg_lat = np.pi * self._R_earth / 180.0
+        # Earth radius and degrees-per-metre factors (flat-earth approximation)
+        self._m_per_deg_lat = np.pi * _EARTH_RADIUS_M / 180.0
         self._m_per_deg_lon = self._m_per_deg_lat * np.cos(np.deg2rad(self.origin_llh[0]))
 
         self._bias = np.zeros(3, dtype=np.float64)
         self._last_obs: dict[str, Any] = {}
+
+    # ------------------------------------------------------------------
+    # Public properties
+    # ------------------------------------------------------------------
+
+    @property
+    def bias(self) -> np.ndarray:
+        """Current position bias vector (metres, world frame)."""
+        return self._bias.copy()
 
     # ------------------------------------------------------------------
     # BaseSensor interface
@@ -112,9 +146,9 @@ class GNSSModel(BaseSensor):
         Produce a realistic GNSS measurement.
 
         Expected keys in *state*:
-        - ``"pos"`` – ``np.ndarray[3]`` world-frame position in metres.
-        - ``"vel"`` – ``np.ndarray[3]`` world-frame velocity in m/s.
-        - ``"obstruction"`` *(optional)* – float 0–1 representing the
+        - ``"pos"`` -- ``np.ndarray[3]`` world-frame position in metres.
+        - ``"vel"`` -- ``np.ndarray[3]`` world-frame velocity in m/s.
+        - ``"obstruction"`` *(optional)* -- float 0-1 representing the
           fraction of sky hemisphere blocked by obstacles (used to scale
           multipath error).
         """
@@ -123,39 +157,39 @@ class GNSSModel(BaseSensor):
         obstruction = float(state.get("obstruction", 0.0))
 
         # Check jammer zones
-        for centre, radius in self.jammer_zones:
-            centre = np.asarray(centre, dtype=np.float64)
-            if np.linalg.norm(true_pos - centre) <= radius:
+        for zone_centre, radius in self.jammer_zones:
+            centre_arr = np.asarray(zone_centre, dtype=np.float64)
+            if np.linalg.norm(true_pos - centre_arr) <= radius:
                 result = {
                     "pos": true_pos.copy(),
                     "vel": true_vel.copy(),
-                    "fix_quality": self.FIX_NO_FIX,
+                    "fix_quality": GnssFixQuality.NO_FIX,
                     "n_satellites": 0,
-                    "hdop": 99.9,
+                    "hdop": _HDOP_NO_FIX,
                 }
                 self._last_obs = result
                 self._mark_updated(sim_time)
                 return result
 
-        # Update bias random walk
+        # Update bias random walk (Gauss-Markov)
         dt = 1.0 / self.update_rate_hz
         alpha = np.exp(-dt / self.bias_tau_s)
         drive_sigma = self.bias_sigma_m * np.sqrt(1.0 - alpha**2)
-        self._bias = alpha * self._bias + np.random.normal(0.0, drive_sigma, 3)
+        self._bias = alpha * self._bias + self._rng.normal(0.0, drive_sigma, 3)
 
         # Position error
-        white = np.random.normal(0.0, self.noise_m, 3)
-        multipath = np.random.normal(0.0, self.multipath_sigma_m * obstruction, 3)
+        white = self._rng.normal(0.0, self.noise_m, 3)
+        multipath = self._rng.normal(0.0, self.multipath_sigma_m * obstruction, 3)
         noisy_pos = true_pos + self._bias + white + multipath
 
         # Velocity error
-        noisy_vel = true_vel + np.random.normal(0.0, self.vel_noise_ms, 3)
+        noisy_vel = true_vel + self._rng.normal(0.0, self.vel_noise_ms, 3)
 
-        # Fix quality
+        # Fix quality and satellite count
         alt = float(true_pos[2])
-        fix_quality = self.FIX_AUTONOMOUS if alt >= self.min_fix_altitude_m else self.FIX_NO_FIX
-        n_sat = int(np.clip(8 - round(obstruction * 6), 0, 12))
-        hdop = np.clip(1.0 + obstruction * 2.5, 1.0, 10.0)
+        fix_quality = GnssFixQuality.AUTONOMOUS if alt >= self.min_fix_altitude_m else GnssFixQuality.NO_FIX
+        n_sat = int(np.clip(_BASE_SATELLITES - round(obstruction * _SAT_LOSS_PER_OBSTRUCTION), 0, _MAX_SATELLITES))
+        hdop = float(np.clip(_HDOP_MIN + obstruction * _HDOP_OBSTRUCTION_SLOPE, _HDOP_MIN, _HDOP_MAX))
 
         # Convert XYZ to lat/lon/height (flat-earth approximation)
         lat = self.origin_llh[0] + noisy_pos[1] / self._m_per_deg_lat
@@ -168,7 +202,7 @@ class GNSSModel(BaseSensor):
             "pos_llh": np.array([lat, lon, alt_m]),
             "fix_quality": fix_quality,
             "n_satellites": n_sat,
-            "hdop": float(hdop),
+            "hdop": hdop,
         }
         self._last_obs = result
         self._mark_updated(sim_time)

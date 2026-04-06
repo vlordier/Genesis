@@ -35,7 +35,7 @@ Quick-start
 from .base import BaseSensor
 from .camera_model import CameraModel
 from .event_camera import Event, EventCameraModel
-from .gnss import GNSSModel
+from .gnss import GnssFixQuality, GNSSModel
 from .lidar import LidarModel, LidarPoint
 from .radio import RadioLinkModel, ScheduledPacket
 from .scheduler import SensorScheduler
@@ -48,6 +48,7 @@ __all__ = [
     "Event",
     "EventCameraModel",
     "GNSSModel",
+    "GnssFixQuality",
     "LidarModel",
     "LidarPoint",
     "RadioLinkModel",

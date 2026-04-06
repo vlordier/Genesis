@@ -9,7 +9,11 @@ uniform, rate-aware fashion.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Final
+
+# Half a simulation sub-step at 10 kHz — used to guard against float drift in
+# the scheduling comparison.
+_SCHEDULE_TOLERANCE_S: Final[float] = 5e-5
 
 
 class BaseSensor(ABC):
@@ -87,7 +91,7 @@ class BaseSensor(ABC):
         if self._last_update_time < 0:
             return True
         period = 1.0 / self.update_rate_hz
-        return (sim_time - self._last_update_time) >= period - 5e-5
+        return (sim_time - self._last_update_time) >= period - _SCHEDULE_TOLERANCE_S
 
     def _mark_updated(self, sim_time: float) -> None:
         self._last_update_time = sim_time

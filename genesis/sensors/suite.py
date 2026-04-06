@@ -48,9 +48,8 @@ Example
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .base import BaseSensor
 from .camera_model import CameraModel
 from .event_camera import EventCameraModel
 from .gnss import GNSSModel
@@ -58,6 +57,9 @@ from .lidar import LidarModel
 from .radio import RadioLinkModel
 from .scheduler import SensorScheduler
 from .thermal_camera import ThermalCameraModel
+
+if TYPE_CHECKING:
+    from .base import BaseSensor
 
 
 class SensorSuite:
@@ -123,7 +125,7 @@ class SensorSuite:
         lidar_rate_hz: float = 10.0,
         gnss_rate_hz: float = 10.0,
         radio_rate_hz: float = 100.0,
-    ) -> "SensorSuite":
+    ) -> SensorSuite:
         """
         Create a :class:`SensorSuite` with default sensor configurations.
 

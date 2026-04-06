@@ -32,12 +32,25 @@ Usage
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Final
 
 import numpy as np
 
 from .base import BaseSensor
+
+# Speed of light (m/s)
+_SPEED_OF_LIGHT_M_S: Final[float] = 3e8
+# Johnson-Nyquist thermal noise floor (dBm/Hz) at 290 K
+_THERMAL_NOISE_DBM_PER_HZ: Final[float] = -174.0
+# Reference bandwidth (1 MHz) used in the noise floor calculation
+_REF_BANDWIDTH_HZ: Final[float] = 1e6
+# Typical excess path loss (dB) in non-line-of-sight conditions
+_NLOS_EXCESS_LOSS_DB_DEFAULT: Final[float] = 20.0
+# Steepness of the sigmoid mapping SNR -> PER
+_PER_SIGMOID_STEEPNESS: Final[float] = 5.0
+# Minimum distance clamp to avoid log(0) in path-loss calculations
+_MIN_DISTANCE_M: Final[float] = 0.1
 
 
 @dataclass
@@ -68,7 +81,7 @@ class RadioLinkModel(BaseSensor):
     noise_figure_db:
         Receiver noise figure in dB.
     path_loss_exponent:
-        Log-distance path-loss exponent (2 = free space, 3–4 = urban).
+        Log-distance path-loss exponent (2 = free space, 3-4 = urban).
     shadowing_sigma_db:
         Standard deviation of log-normal shadow fading in dB.
     min_snr_db:
@@ -79,11 +92,14 @@ class RadioLinkModel(BaseSensor):
         Minimum latency (processing + propagation) in seconds.
     jitter_sigma_s:
         Standard deviation of latency jitter in seconds.
+    nlos_excess_loss_db:
+        Additional path loss (dB) applied when ``has_los=False``.
+    seed:
+        Optional seed for the random-number generator (reproducibility).
     los_required:
-        If ``True``, packets sent without line-of-sight are dropped.
+        If ``True``, packets sent without line-of-sight are dropped
+        immediately.  Must be passed as a keyword argument.
     """
-
-    SPEED_OF_LIGHT = 3e8  # m/s
 
     def __init__(
         self,
@@ -98,6 +114,9 @@ class RadioLinkModel(BaseSensor):
         snr_transition_db: float = 10.0,
         base_latency_s: float = 0.001,
         jitter_sigma_s: float = 0.0005,
+        nlos_excess_loss_db: float = _NLOS_EXCESS_LOSS_DB_DEFAULT,
+        seed: int | None = None,
+        *,
         los_required: bool = False,
     ) -> None:
         super().__init__(name=name, update_rate_hz=update_rate_hz)
@@ -110,13 +129,24 @@ class RadioLinkModel(BaseSensor):
         self.snr_transition_db = float(snr_transition_db)
         self.base_latency_s = float(base_latency_s)
         self.jitter_sigma_s = float(jitter_sigma_s)
-        self.los_required = bool(los_required)
+        self.nlos_excess_loss_db = float(nlos_excess_loss_db)
+        self.los_required = los_required
+        self._rng = np.random.default_rng(seed=seed)
 
-        # kTB noise floor at 290 K, 1 MHz bandwidth → ~−114 dBm / MHz
-        self._noise_floor_dbm = -174.0 + 10 * np.log10(1e6) + self.noise_figure_db
+        # kTB noise floor at 290 K, 1 MHz bandwidth -> ~-114 dBm/MHz
+        self._noise_floor_dbm = _THERMAL_NOISE_DBM_PER_HZ + 10 * np.log10(_REF_BANDWIDTH_HZ) + self.noise_figure_db
 
         self._queue: list[ScheduledPacket] = []
         self._last_obs: dict[str, Any] = {"delivered": []}
+
+    # ------------------------------------------------------------------
+    # Public properties
+    # ------------------------------------------------------------------
+
+    @property
+    def queue_depth(self) -> int:
+        """Number of packets currently awaiting delivery."""
+        return len(self._queue)
 
     # ------------------------------------------------------------------
     # BaseSensor interface
@@ -136,7 +166,7 @@ class RadioLinkModel(BaseSensor):
         """
         delivered = [p for p in self._queue if p.delivery_time <= sim_time]
         self._queue = [p for p in self._queue if p.delivery_time > sim_time]
-        result = {"delivered": delivered, "queue_depth": len(self._queue)}
+        result = {"delivered": delivered, "queue_depth": self.queue_depth}
         self._last_obs = result
         self._mark_updated(sim_time)
         return result
@@ -154,6 +184,7 @@ class RadioLinkModel(BaseSensor):
         src_pos: np.ndarray,
         dst_pos: np.ndarray,
         sim_time: float,
+        *,
         has_los: bool = True,
     ) -> ScheduledPacket | None:
         """
@@ -168,8 +199,9 @@ class RadioLinkModel(BaseSensor):
         sim_time:
             Current simulation time in seconds.
         has_los:
-            Whether there is line-of-sight between the two nodes.  Set to
-            ``False`` to model NLOS (adds extra attenuation).
+            Whether there is line-of-sight between the two nodes.  Must be
+            passed as a keyword argument.  Set to ``False`` to model NLOS
+            (adds ``nlos_excess_loss_db`` extra attenuation).
 
         Returns
         -------
@@ -181,34 +213,18 @@ class RadioLinkModel(BaseSensor):
 
         src_pos = np.asarray(src_pos, dtype=np.float64)
         dst_pos = np.asarray(dst_pos, dtype=np.float64)
-        dist_m = float(np.linalg.norm(dst_pos - src_pos))
-        dist_m = max(dist_m, 0.1)  # avoid log(0)
+        dist_m = max(float(np.linalg.norm(dst_pos - src_pos)), _MIN_DISTANCE_M)
 
-        # Free-space path loss + log-distance model
-        freq_hz = self.frequency_ghz * 1e9
-        lambda_m = self.SPEED_OF_LIGHT / freq_hz
-        fspl_db = 20 * np.log10(4 * np.pi / lambda_m)
-        pl_db = fspl_db + 10 * self.path_loss_exponent * np.log10(dist_m)
-
-        # NLOS penalty
-        if not has_los:
-            pl_db += 20.0  # typical NLOS excess loss
-
-        # Shadow fading
-        shadow_db = np.random.normal(0.0, self.shadowing_sigma_db)
-        rx_power_dbm = self.tx_power_dbm - pl_db - shadow_db
-
-        # SNR
+        rx_power_dbm = self._compute_rx_power(dist_m, has_los=has_los)
         snr_db = rx_power_dbm - self._noise_floor_dbm
 
-        # Packet error probability via sigmoid
         per = self._snr_to_per(snr_db)
-        if np.random.random() < per:
+        if self._rng.random() < per:
             return None  # packet dropped
 
         # Latency + jitter
-        propagation_s = dist_m / self.SPEED_OF_LIGHT
-        jitter = abs(np.random.normal(0.0, self.jitter_sigma_s))
+        propagation_s = dist_m / _SPEED_OF_LIGHT_M_S
+        jitter = float(abs(self._rng.normal(0.0, self.jitter_sigma_s)))
         delivery_time = sim_time + self.base_latency_s + propagation_s + jitter
 
         pkt = ScheduledPacket(
@@ -229,25 +245,20 @@ class RadioLinkModel(BaseSensor):
         self,
         src_pos: np.ndarray,
         dst_pos: np.ndarray,
+        *,
         has_los: bool = True,
     ) -> dict[str, float]:
         """
         Return estimated link quality metrics without sending a packet.
 
-        Useful for monitoring / visualisation.
+        Useful for monitoring / visualisation.  ``has_los`` must be passed
+        as a keyword argument.
         """
         src_pos = np.asarray(src_pos, dtype=np.float64)
         dst_pos = np.asarray(dst_pos, dtype=np.float64)
-        dist_m = float(np.linalg.norm(dst_pos - src_pos))
-        dist_m = max(dist_m, 0.1)
+        dist_m = max(float(np.linalg.norm(dst_pos - src_pos)), _MIN_DISTANCE_M)
 
-        freq_hz = self.frequency_ghz * 1e9
-        lambda_m = self.SPEED_OF_LIGHT / freq_hz
-        fspl_db = 20 * np.log10(4 * np.pi / lambda_m)
-        pl_db = fspl_db + 10 * self.path_loss_exponent * np.log10(dist_m)
-        if not has_los:
-            pl_db += 20.0
-        rx_power_dbm = self.tx_power_dbm - pl_db
+        rx_power_dbm = self._compute_rx_power(dist_m, has_los=has_los)
         snr_db = rx_power_dbm - self._noise_floor_dbm
         per = self._snr_to_per(snr_db)
 
@@ -256,12 +267,27 @@ class RadioLinkModel(BaseSensor):
             "rx_power_dbm": rx_power_dbm,
             "snr_db": snr_db,
             "packet_error_rate": per,
-            "has_los": has_los,
+            "has_los": float(has_los),
         }
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _compute_rx_power(self, dist_m: float, *, has_los: bool) -> float:
+        """Compute received power in dBm for a given distance and LoS flag."""
+        freq_hz = self.frequency_ghz * 1e9
+        lambda_m = _SPEED_OF_LIGHT_M_S / freq_hz
+        fspl_db = 20 * np.log10(4 * np.pi / lambda_m)
+        pl_db = fspl_db + 10 * self.path_loss_exponent * np.log10(dist_m)
+        if not has_los:
+            pl_db += self.nlos_excess_loss_db
+        shadow_db = float(self._rng.normal(0.0, self.shadowing_sigma_db))
+        return self.tx_power_dbm - pl_db - shadow_db
 
     def _snr_to_per(self, snr_db: float) -> float:
         """Sigmoid mapping from SNR to packet error rate."""
-        # PER → 0 at high SNR, → 1 at low SNR
+        # PER -> 0 at high SNR, -> 1 at low SNR
         x = -(snr_db - self.min_snr_db) / max(self.snr_transition_db, 1e-3)
-        per = 1.0 / (1.0 + np.exp(-x * 5))  # steepness factor 5
+        per = 1.0 / (1.0 + np.exp(-x * _PER_SIGMOID_STEEPNESS))
         return float(np.clip(per, 0.0, 1.0))

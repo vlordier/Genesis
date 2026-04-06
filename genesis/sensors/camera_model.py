@@ -18,11 +18,18 @@ the model remains backend-agnostic and can run without a GPU.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 import numpy as np
 
 from .base import BaseSensor
+
+# Sensor-level constants
+_UINT8_MAX: Final[int] = 255
+_FLOAT_CLIP_MAX: Final[float] = 1.0
+_FLOAT_CLIP_MIN: Final[float] = 0.0
+# Default full-well capacity (electrons) at base ISO
+_DEFAULT_FULL_WELL_ELECTRONS: Final[float] = 3500.0
 
 
 class CameraModel(BaseSensor):
@@ -42,7 +49,7 @@ class CameraModel(BaseSensor):
         Pass an empty tuple or ``None`` to skip distortion.
     rolling_shutter_fraction:
         Fraction of the frame period over which the sensor is actively
-        read out (0 → global shutter, 1 → full rolling shutter).
+        read out (0 - global shutter, 1 - full rolling shutter).
     motion_blur_kernel:
         Half-length of the 1-D motion-blur kernel (0 = disabled).
     base_iso:
@@ -59,7 +66,12 @@ class CameraModel(BaseSensor):
         construction time.
     jpeg_quality:
         If ``> 0`` and ``opencv-python`` is available, apply JPEG
-        compression with this quality level (1–100).
+        compression with this quality level (1-100).
+    full_well_electrons:
+        Full-well capacity at *base_iso* in electron counts.  Scales the
+        Poisson shot-noise model.  Default is 3500 e-.
+    seed:
+        Optional seed for the random-number generator (reproducibility).
     """
 
     def __init__(
@@ -76,6 +88,7 @@ class CameraModel(BaseSensor):
         dead_pixel_fraction: float = 0.0001,
         hot_pixel_fraction: float = 0.00005,
         jpeg_quality: int = 0,
+        full_well_electrons: float = _DEFAULT_FULL_WELL_ELECTRONS,
         seed: int | None = None,
     ) -> None:
         super().__init__(name=name, update_rate_hz=update_rate_hz)
@@ -87,12 +100,13 @@ class CameraModel(BaseSensor):
         self.iso = float(iso)
         self.read_noise_sigma = float(read_noise_sigma)
         self.jpeg_quality = int(jpeg_quality)
+        self.full_well_electrons = float(full_well_electrons)
 
         w, h = self.resolution
-        rng = np.random.default_rng(seed=seed)
+        self._rng = np.random.default_rng(seed=seed)
         n_pixels = w * h
-        self._dead_mask = rng.random(n_pixels) < dead_pixel_fraction
-        self._hot_mask = rng.random(n_pixels) < hot_pixel_fraction
+        self._dead_mask = self._rng.random(n_pixels) < dead_pixel_fraction
+        self._hot_mask = self._rng.random(n_pixels) < hot_pixel_fraction
 
         self._last_obs: dict[str, Any] = {}
         self._prev_frame: np.ndarray | None = None  # for rolling-shutter / blur
@@ -111,9 +125,9 @@ class CameraModel(BaseSensor):
         Apply the full corruption pipeline to ``state["rgb"]``.
 
         Expected keys in *state*:
-        - ``"rgb"`` – ``np.ndarray`` shape ``(H, W, 3)`` dtype ``uint8`` or
+        - ``"rgb"`` -- ``np.ndarray`` shape ``(H, W, 3)`` dtype ``uint8`` or
           ``float32`` (will be normalised to ``[0, 1]``).
-        - ``"pose_history"`` *(optional)* – list of recent poses used for
+        - ``"pose_history"`` *(optional)* -- list of recent poses used for
           rolling-shutter simulation.
         """
         rgb = state.get("rgb")
@@ -128,7 +142,7 @@ class CameraModel(BaseSensor):
 
         # 2. Rolling shutter (smear between prev and current frame)
         if self.rolling_shutter_fraction > 0 and self._prev_frame is not None:
-            img = self._apply_rolling_shutter(img)
+            img = self._apply_rolling_shutter(img, self._prev_frame)
 
         # 3. Motion blur
         if self.motion_blur_kernel > 0:
@@ -136,7 +150,7 @@ class CameraModel(BaseSensor):
 
         # 4. Exposure / gain
         gain = self.iso / self.base_iso
-        img = np.clip(img * gain, 0.0, 1.0)
+        img = np.clip(img * gain, _FLOAT_CLIP_MIN, _FLOAT_CLIP_MAX)
 
         # 5. Noise (Poisson shot + Gaussian read)
         img = self._apply_noise(img)
@@ -163,13 +177,13 @@ class CameraModel(BaseSensor):
     @staticmethod
     def _to_float(img: np.ndarray) -> np.ndarray:
         img = np.asarray(img, dtype=np.float32)
-        if img.max() > 1.0:
-            img = img / 255.0
+        if img.max() > _FLOAT_CLIP_MAX:
+            img = img / _UINT8_MAX
         return img
 
     @staticmethod
     def _to_uint8(img: np.ndarray) -> np.ndarray:
-        return (np.clip(img, 0.0, 1.0) * 255).astype(np.uint8)
+        return (np.clip(img, _FLOAT_CLIP_MIN, _FLOAT_CLIP_MAX) * _UINT8_MAX).astype(np.uint8)
 
     def _apply_distortion(self, img: np.ndarray) -> np.ndarray:
         """Apply Brown-Conrady radial + tangential lens distortion."""
@@ -180,25 +194,27 @@ class CameraModel(BaseSensor):
 
             h, w = img.shape[:2]
             # Build a simple camera matrix centred in the image
-            fx = fy = max(w, h)
+            focal = float(max(w, h))
             cx, cy = w / 2.0, h / 2.0
-            K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32)
+            camera_matrix = np.array(
+                [[focal, 0.0, cx], [0.0, focal, cy], [0.0, 0.0, 1.0]],
+                dtype=np.float32,
+            )
             dist = self.distortion_coeffs
-            map1, map2 = cv2.initUndistortRectifyMap(K, dist, None, K, (w, h), cv2.CV_32FC1)
+            map1, map2 = cv2.initUndistortRectifyMap(camera_matrix, dist, None, camera_matrix, (w, h), cv2.CV_32FC1)
             return cv2.remap(img, map1, map2, interpolation=cv2.INTER_LINEAR)
         except ImportError:
             return img  # graceful degradation when opencv is not available
 
-    def _apply_rolling_shutter(self, img: np.ndarray) -> np.ndarray:
+    def _apply_rolling_shutter(self, img: np.ndarray, prev: np.ndarray) -> np.ndarray:
         """
         Blend previous and current frame row-by-row to simulate rolling
         shutter.  The top row is purely from the current frame; the bottom
-        row is ``rolling_shutter_fraction * prev + (1-f) * current``.
+        row blends ``rolling_shutter_fraction`` of the previous frame.
         """
         h = img.shape[0]
         alphas = np.linspace(0.0, self.rolling_shutter_fraction, h, dtype=np.float32)
         blended = np.empty_like(img)
-        prev = self._prev_frame
         for r in range(h):
             a = alphas[r]
             blended[r] = (1.0 - a) * img[r] + a * prev[r]
@@ -220,21 +236,20 @@ class CameraModel(BaseSensor):
 
     def _apply_noise(self, img: np.ndarray) -> np.ndarray:
         """Add Poisson shot noise scaled by ISO and Gaussian read noise."""
-        # Photon-count domain: scale to ~[0, 3500] electron counts
-        max_electrons = 3500.0 * (self.base_iso / self.iso)
+        max_electrons = self.full_well_electrons * (self.base_iso / self.iso)
         electrons = img * max_electrons
         # Shot noise (Poisson)
-        shot = np.random.poisson(np.clip(electrons, 0, None)).astype(np.float32)
+        shot = self._rng.poisson(np.clip(electrons, 0, None)).astype(np.float32)
         # Read noise
-        read = np.random.normal(0, self.read_noise_sigma, img.shape).astype(np.float32)
-        return np.clip((shot + read) / max_electrons, 0.0, 1.0)
+        read = self._rng.normal(0.0, self.read_noise_sigma, img.shape).astype(np.float32)
+        return np.clip((shot + read) / max_electrons, _FLOAT_CLIP_MIN, _FLOAT_CLIP_MAX)
 
     def _apply_fixed_pattern_noise(self, img: np.ndarray) -> np.ndarray:
         """Apply permanently dead (black) and hot (white) pixels."""
         h, w = img.shape[:2]
         flat = img.reshape(h * w, -1)
-        flat[self._dead_mask[: h * w]] = 0.0
-        flat[self._hot_mask[: h * w]] = 1.0
+        flat[self._dead_mask[: h * w]] = _FLOAT_CLIP_MIN
+        flat[self._hot_mask[: h * w]] = _FLOAT_CLIP_MAX
         return flat.reshape(img.shape)
 
     def _apply_jpeg(self, img: np.ndarray) -> np.ndarray:
@@ -248,6 +263,6 @@ class CameraModel(BaseSensor):
             _, encoded = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
             decoded = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
             rgb = cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB)
-            return rgb.astype(np.float32) / 255.0
+            return rgb.astype(np.float32) / _UINT8_MAX
         except ImportError:
             return img

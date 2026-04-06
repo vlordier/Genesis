@@ -27,9 +27,10 @@ Example
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .base import BaseSensor
+if TYPE_CHECKING:
+    from .base import BaseSensor
 
 
 class SensorScheduler:
@@ -91,18 +92,14 @@ class SensorScheduler:
         Returns
         -------
         dict
-            Mapping ``sensor_name → observation_dict``.  Sensors that
+            Mapping ``sensor_name -> observation_dict``.  Sensors that
             were not due for an update contribute their cached
             ``get_observation()`` result.
         """
-        observations: dict[str, dict[str, Any]] = {}
-        for name, sensor in self._sensors.items():
-            if sensor.is_due(sim_time):
-                obs = sensor.step(sim_time=sim_time, state=state)
-            else:
-                obs = sensor.get_observation()
-            observations[name] = obs
-        return observations
+        return {
+            name: (sensor.step(sim_time=sim_time, state=state) if sensor.is_due(sim_time) else sensor.get_observation())
+            for name, sensor in self._sensors.items()
+        }
 
     # ------------------------------------------------------------------
     # Inspection
