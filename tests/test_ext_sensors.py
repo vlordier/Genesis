@@ -580,6 +580,22 @@ class TestFrozenDataclasses:
         assert e.polarity == Polarity.NEGATIVE
         assert int(e.polarity) == -1
 
+    def test_ba_noise_events_polarity_is_enum(self) -> None:
+        """Background-activity noise events must have Polarity enum polarity, not plain int."""
+        rng = np.random.default_rng(seed=99)
+        gray = rng.random((16, 16)).astype(np.float32)
+        cam = EventCameraModel(background_activity_rate_hz=1e6, update_rate_hz=100.0, seed=0)
+        cam.reset()
+        cam.step(0.0, {"gray": gray})
+        # Large BA rate ensures noise events are generated
+        obs = cam.step(0.01, {"gray": gray})
+        events = obs["events"]
+        assert len(events) > 0, "Expected BA noise events at 1 MHz rate"
+        for ev in events:
+            assert isinstance(ev.polarity, Polarity), (
+                f"Expected Polarity enum, got {type(ev.polarity).__name__} ({ev.polarity!r})"
+            )
+
     def test_lidar_point_is_frozen(self) -> None:
         from genesis.sensors import LidarPoint
 
@@ -642,6 +658,21 @@ class TestCameraConfig:
         assert cfg.iso == 200.0
         assert cfg.update_rate_hz == 15.0
 
+    def test_get_config_preserves_dead_hot_pixel_fractions(self) -> None:
+        """get_config() must include dead_pixel_fraction and hot_pixel_fraction."""
+        cam = CameraModel(dead_pixel_fraction=0.01, hot_pixel_fraction=0.005, resolution=(8, 8))
+        cfg = cam.get_config()
+        assert cfg.dead_pixel_fraction == pytest.approx(0.01)
+        assert cfg.hot_pixel_fraction == pytest.approx(0.005)
+
+    def test_dead_hot_pixel_round_trip(self) -> None:
+        """from_config(get_config()) must use the same dead/hot pixel fractions."""
+        cam = CameraModel(dead_pixel_fraction=0.02, hot_pixel_fraction=0.01, resolution=(8, 8), seed=0)
+        cfg = cam.get_config()
+        cam2 = CameraModel.from_config(cfg)
+        assert cam2.dead_pixel_fraction == pytest.approx(cam.dead_pixel_fraction)
+        assert cam2.hot_pixel_fraction == pytest.approx(cam.hot_pixel_fraction)
+
 
 class TestEventCameraConfig:
     def test_default_construction(self) -> None:
@@ -697,6 +728,21 @@ class TestLidarConfig:
         cfg = sensor.get_config()
         assert cfg.rain_rate_mm_h == 5.0
         assert cfg.dropout_prob == 0.01
+
+    def test_channel_offsets_none_preserved(self) -> None:
+        """get_config() must return None for channel_offsets_m when init'd with None."""
+        sensor = LidarModel(n_channels=8)
+        cfg = sensor.get_config()
+        assert cfg.channel_offsets_m is None
+
+    def test_channel_offsets_roundtrip(self) -> None:
+        """Non-None channel offsets survive get_config / from_config round-trip."""
+        offsets = [0.01, -0.01, 0.02, -0.02, 0.0, 0.0, 0.01, -0.01]
+        sensor = LidarModel(n_channels=8, channel_offsets_m=offsets)
+        cfg = sensor.get_config()
+        assert cfg.channel_offsets_m == pytest.approx(offsets)
+        sensor2 = LidarModel.from_config(cfg)
+        assert list(sensor2._channel_offsets) == pytest.approx(offsets)
 
 
 class TestGNSSConfig:

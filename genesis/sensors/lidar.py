@@ -146,8 +146,10 @@ class LidarModel(BaseSensor):
 
         if channel_offsets_m is not None:
             self._channel_offsets = np.asarray(channel_offsets_m, dtype=np.float32)
+            self._channel_offsets_m_given = True
         else:
             self._channel_offsets = np.zeros(self.n_channels, dtype=np.float32)
+            self._channel_offsets_m_given = False
 
         # Elevation angles for each channel
         elev_min, elev_max = self.v_fov_deg
@@ -198,7 +200,7 @@ class LidarModel(BaseSensor):
             dropout_prob=self.dropout_prob,
             rain_rate_mm_h=self.rain_rate_mm_h,
             fog_density=self.fog_density,
-            channel_offsets_m=list(self._channel_offsets),
+            channel_offsets_m=list(self._channel_offsets) if self._channel_offsets_m_given else None,
         )
 
     # ------------------------------------------------------------------

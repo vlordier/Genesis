@@ -307,8 +307,11 @@ class EventCameraModel(BaseSensor):
             return []
         xs = self._rng.integers(0, w, n_noise)
         ys = self._rng.integers(0, h, n_noise)
-        pols = self._rng.choice([-1, 1], n_noise)
-        return [Event(x=int(x), y=int(y), timestamp=sim_time, polarity=p) for x, y, p in zip(xs, ys, pols, strict=True)]
+        raw_pols = self._rng.choice([-1, 1], n_noise)
+        return [
+            Event(x=int(x), y=int(y), timestamp=sim_time, polarity=Polarity(int(p)))
+            for x, y, p in zip(xs, ys, raw_pols, strict=True)
+        ]
 
     @staticmethod
     def _rgb_to_gray(rgb: np.ndarray) -> FloatArray:

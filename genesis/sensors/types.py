@@ -92,22 +92,23 @@ class SensorState(TypedDict, total=False):
         }
     """
 
-    # Visual
-    rgb: Any  # np.ndarray (H, W, 3) uint8 or float32
-    depth: Any  # np.ndarray (H, W) float32, metres
-    seg: Any  # np.ndarray (H, W) int32, entity IDs
-    normal: Any  # np.ndarray (H, W, 3) float32
-    gray: Any  # np.ndarray (H, W) float32, [0, 1]
+    # Visual — shape annotations are in comments; TypedDict fields must be
+    # plain types, so we use the closest NDArray alias available.
+    rgb: UInt8Array  # shape (H, W, 3) — may also be float32 [0, 1]
+    depth: FloatArray  # shape (H, W), metres
+    seg: Int32Array  # shape (H, W), entity IDs
+    normal: FloatArray  # shape (H, W, 3)
+    gray: FloatArray  # shape (H, W), [0, 1]
 
     # Pose / velocity
-    pose: Any  # (pos, quat) pair
-    pos: Any  # np.ndarray (3,) metres ENU
-    vel: Any  # np.ndarray (3,) m/s ENU
-    ang_vel: Any  # np.ndarray (3,) rad/s
+    pose: tuple[FloatArray, FloatArray]  # (pos (3,), quat (4,))
+    pos: Float64Array  # shape (3,) metres ENU
+    vel: Float64Array  # shape (3,) m/s ENU
+    ang_vel: FloatArray  # shape (3,) rad/s
 
     # LiDAR
-    range_image: Any  # np.ndarray (n_channels, h_resolution) float32, metres
-    intensity_image: Any  # np.ndarray (n_channels, h_resolution) float32, [0, 1]
+    range_image: FloatArray  # shape (n_channels, h_resolution), metres
+    intensity_image: FloatArray  # shape (n_channels, h_resolution), [0, 1]
 
     # Thermal
     temperature_map: dict[int, float]  # entity_id → temperature °C

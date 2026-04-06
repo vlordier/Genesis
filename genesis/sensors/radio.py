@@ -169,10 +169,7 @@ class RadioLinkModel(BaseSensor):
     @classmethod
     def from_config(cls, config: "RadioConfig") -> "RadioLinkModel":
         """Construct a :class:`RadioLinkModel` from a :class:`~genesis.sensors.config.RadioConfig`."""
-        # los_required is keyword-only in __init__; extract it separately
-        data = config.model_dump()
-        los_required = data.pop("los_required", False)
-        return cls(**data, los_required=los_required)
+        return cls(**config.model_dump())
 
     def get_config(self) -> "RadioConfig":
         """Return the current parameters as a :class:`~genesis.sensors.config.RadioConfig`."""

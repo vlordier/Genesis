@@ -106,11 +106,14 @@ class CameraModel(BaseSensor):
         self.jpeg_quality = int(jpeg_quality)
         self.full_well_electrons = float(full_well_electrons)
 
+        self.dead_pixel_fraction = float(dead_pixel_fraction)
+        self.hot_pixel_fraction = float(hot_pixel_fraction)
+
         w, h = self.resolution
         self._rng = np.random.default_rng(seed=seed)
         n_pixels = w * h
-        self._dead_mask = self._rng.random(n_pixels) < dead_pixel_fraction
-        self._hot_mask = self._rng.random(n_pixels) < hot_pixel_fraction
+        self._dead_mask = self._rng.random(n_pixels) < self.dead_pixel_fraction
+        self._hot_mask = self._rng.random(n_pixels) < self.hot_pixel_fraction
 
         # ------------------------------------------------------------------
         # Pre-computed constants (avoid repeated arithmetic inside step())
@@ -189,6 +192,8 @@ class CameraModel(BaseSensor):
             base_iso=self.base_iso,
             iso=self.iso,
             read_noise_sigma=self.read_noise_sigma,
+            dead_pixel_fraction=self.dead_pixel_fraction,
+            hot_pixel_fraction=self.hot_pixel_fraction,
             jpeg_quality=self.jpeg_quality,
             full_well_electrons=self.full_well_electrons,
         )
