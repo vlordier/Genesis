@@ -45,6 +45,19 @@ Quick-start (config-driven)
     )
     suite = SensorSuite.from_config(cfg)
     print(cfg.model_dump_json(indent=2))  # serialise to JSON
+
+Quick-start (device presets)
+----------------------------
+::
+
+    from genesis.sensors import get_preset, list_presets, LidarModel
+
+    print(list_presets())                       # sorted list of all preset names
+    vlp16 = get_preset("VELODYNE_VLP16")        # returns LidarConfig
+    lidar = LidarModel.from_config(vlp16)
+
+    # All 14 presets are also importable by name:
+    from genesis.sensors import RASPBERRY_PI_V2, VELODYNE_VLP16, PIXHAWK_ICM20689, UBLOX_F9P_RTK
 """
 
 from . import presets
