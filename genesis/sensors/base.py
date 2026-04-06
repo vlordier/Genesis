@@ -102,3 +102,6 @@ class BaseSensor(ABC):
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(name={self.name!r}, rate={self.update_rate_hz} Hz)"
+
+
+__all__ = ["BaseSensor"]
