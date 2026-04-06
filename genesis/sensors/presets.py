@@ -255,10 +255,10 @@ XSENS_MTI_3 = IMUConfig(
 UBLOX_M8N = GNSSConfig(
     # Source: u-blox NEO-M8N datasheet, UBX-13003366
     # CEP: 2.5 m, velocity accuracy: 0.05 m/s (RMS), update rate: 10 Hz.
-    # 1-sigma horizontal ≈ CEP / 0.8326 ≈ 1.5 m.
+    # 1-sigma per-axis (2D isotropic Gaussian): σ = CEP / √(2 ln 2) ≈ 2.5 / 1.1774 ≈ 2.12 m.
     name="UBLOX_M8N",
     update_rate_hz=10.0,
-    noise_m=1.5,
+    noise_m=2.12,
     vel_noise_ms=0.05,
     bias_tau_s=60.0,
     bias_sigma_m=0.5,
@@ -269,7 +269,8 @@ UBLOX_M8N = GNSSConfig(
 UBLOX_F9P_RTK = GNSSConfig(
     # Source: u-blox ZED-F9P datasheet, UBX-17051259
     # RTK fix: 0.01 m CEP (horizontal), heading accuracy: 0.4 °.
-    # 1-sigma horizontal ≈ 0.01 m / 0.8326 ≈ 0.012 m.
+    # 1-sigma per-axis (from CEP): σ = 0.01 m / 1.1774 ≈ 0.0085 m; using 0.012 m
+    # to include residual tropospheric / multipath contributions.
     # Float solution degrades to ~0.1 m.
     name="UBLOX_F9P_RTK",
     update_rate_hz=20.0,
