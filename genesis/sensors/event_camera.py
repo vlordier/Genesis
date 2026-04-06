@@ -56,7 +56,7 @@ class Event:
     polarity: Polarity  # Polarity.POSITIVE (+1) or Polarity.NEGATIVE (-1)
 
 
-def pack_events(
+def _pack_events(
     pos_yx: np.ndarray,
     neg_yx: np.ndarray,
     timestamp: float,
@@ -299,7 +299,7 @@ class EventCameraModel(BaseSensor):
             fire_mask = pos_mask | neg_mask
             self._last_fire_time[fire_mask] = sim_time
 
-        return pack_events(np.argwhere(pos_mask), np.argwhere(neg_mask), sim_time)
+        return _pack_events(np.argwhere(pos_mask), np.argwhere(neg_mask), sim_time)
 
     def _add_background_events(self, h: int, w: int, sim_time: float) -> list[Event]:
         """Generate spontaneous background-activity noise events."""
