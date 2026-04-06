@@ -378,11 +378,11 @@ class TestLidarModelChannels:
         sensor_lidar_n_channels: int,
         sensor_range_image: np.ndarray,
     ) -> None:
-        """Points array must be 2-D float32."""
+        """Points array must be 2-D float32 (N points × 4 columns)."""
         lidar = LidarModel(n_channels=sensor_lidar_n_channels, h_resolution=360, seed=0)
         obs = lidar.step(0.0, {"range_image": sensor_range_image})
         pts = obs["points"]
-        assert pts.ndim == _LIDAR_POINT_COLS // 2  # i.e. 2
+        assert pts.ndim == 2  # shape is (N, 4): N points, each with x, y, z, intensity
         assert pts.dtype == np.float32
 
     def test_point_cloud_has_4_columns(
