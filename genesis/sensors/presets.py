@@ -367,6 +367,8 @@ def get_preset(name: str) -> PresetConfig:
 
 
 __all__ = [
+    # Type alias
+    "PresetConfig",
     # Camera presets
     "RASPBERRY_PI_V2",
     "INTEL_D435_RGB",
