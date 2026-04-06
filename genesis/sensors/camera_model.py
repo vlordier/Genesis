@@ -501,3 +501,6 @@ class CameraModel(BaseSensor):
             yf = yg + shift * self._ca_dy
             out[..., ch_idx] = _bilinear_sample(img[..., ch_idx], xf, yf)
         return out
+
+
+__all__ = ["CameraModel"]
