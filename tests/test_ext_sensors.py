@@ -40,7 +40,7 @@ from genesis.sensors.config import (
     ThermalCameraConfig,
 )
 
-# Number of colour channels in an RGB image
+# Number of color channels in an RGB image
 _RGB_CHANNELS = 3
 # Expected number of columns in a LiDAR point-cloud row: x, y, z, intensity
 _LIDAR_POINT_COLS = 4
