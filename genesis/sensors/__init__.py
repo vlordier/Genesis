@@ -71,6 +71,7 @@ from .presets import (
     NOVATEL_OEM7,
     OUSTER_OS1_64,
     PIXHAWK_ICM20689,
+    PresetConfig,
     RASPBERRY_PI_V2,
     UBLOX_F9P_RTK,
     UBLOX_M8N,
@@ -128,6 +129,8 @@ __all__ = [
     # Preset helpers
     "get_preset",
     "list_presets",
+    # Preset type alias
+    "PresetConfig",
     # Sensor classes
     "BaseSensor",
     "CameraModel",
