@@ -17,7 +17,8 @@ Usage
     cam = CameraModel.from_config(RASPBERRY_PI_V2)
 
     # Discover available presets
-    print(list_presets())           # ["RASPBERRY_PI_V2", "INTEL_D435_RGB", ...]
+    print(list_presets())           # ["GOPRO_HERO11_4K30", "INTEL_D435_RGB", ...]
+    print(list_presets(kind="lidar"))  # ["LIVOX_AVIA", "OUSTER_OS1_64", ...]
 
     # Retrieve by name (case-insensitive)
     cfg = get_preset("velodyne_vlp16")
