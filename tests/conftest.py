@@ -834,3 +834,84 @@ def png_snapshot(request, snapshot):
         )
 
     return snapshot_obj
+
+
+# ---------------------------------------------------------------------------
+# External-sensor-layer fixtures  (no Genesis scene / EGL required)
+# ---------------------------------------------------------------------------
+
+#: Three representative (width, height) resolutions exercised in sensor tests.
+_SENSOR_RESOLUTIONS: list[tuple[int, int]] = [(16, 16), (32, 32), (64, 48)]
+
+
+@pytest.fixture(
+    params=_SENSOR_RESOLUTIONS,
+    ids=["16x16", "32x32", "64x48"],
+)
+def sensor_resolution(request) -> tuple[int, int]:
+    """Parametrised ``(width, height)`` for sensor model tests."""
+    return request.param
+
+
+@pytest.fixture
+def sensor_rgb_image(sensor_resolution) -> np.ndarray:
+    """Random uint8 ``(H, W, 3)`` image at the parametrised resolution."""
+    w, h = sensor_resolution
+    return np.random.default_rng(seed=0).integers(0, 255, (h, w, 3), dtype=np.uint8)
+
+
+@pytest.fixture
+def sensor_gray_image(sensor_resolution) -> np.ndarray:
+    """Random float32 ``(H, W)`` grayscale image in ``[0, 1]``."""
+    w, h = sensor_resolution
+    return np.random.default_rng(seed=0).random((h, w)).astype(np.float32)
+
+
+@pytest.fixture
+def sensor_seg_mask(sensor_resolution) -> np.ndarray:
+    """Random int32 ``(H, W)`` segmentation mask with entity IDs in ``[0, 3]``."""
+    w, h = sensor_resolution
+    return np.random.default_rng(seed=0).integers(0, 4, (h, w), dtype=np.int32)
+
+
+@pytest.fixture(
+    params=[16, 32, 64],
+    ids=["ch16", "ch32", "ch64"],
+)
+def sensor_lidar_n_channels(request) -> int:
+    """Parametrised LiDAR channel count."""
+    return request.param
+
+
+@pytest.fixture
+def sensor_range_image(sensor_lidar_n_channels) -> np.ndarray:
+    """Random float32 ``(n_channels, 360)`` range image in ``[1, 50]`` m."""
+    rng = np.random.default_rng(seed=0)
+    return rng.uniform(1.0, 50.0, (sensor_lidar_n_channels, 360)).astype(np.float32)
+
+
+@pytest.fixture(
+    params=[0.0, 0.5, 2.0],
+    ids=["noise0m", "noise0.5m", "noise2m"],
+)
+def sensor_gnss_noise_m(request) -> float:
+    """Parametrised GNSS position noise (metres)."""
+    return request.param
+
+
+@pytest.fixture(
+    params=[8, 14],
+    ids=["8bit", "14bit"],
+)
+def sensor_thermal_bit_depth(request) -> int:
+    """Parametrised thermal-camera output bit depth."""
+    return request.param
+
+
+@pytest.fixture(
+    params=[100.0, 400.0],
+    ids=["iso100", "iso400"],
+)
+def sensor_camera_iso(request) -> float:
+    """Parametrised camera ISO value."""
+    return request.param
