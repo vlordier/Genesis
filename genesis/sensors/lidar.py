@@ -254,7 +254,21 @@ class LidarModel(BaseSensor):
             return self._last_obs
 
         range_img = np.asarray(range_img, dtype=np.float32)
+        if range_img.ndim != 2:
+            raise ValueError(
+                f"state['range_image'] must be a 2-D array of shape "
+                f"(n_channels, h_resolution), got shape {range_img.shape}"
+            )
         n_ch, n_az = range_img.shape
+        if n_ch != self.n_channels:
+            raise ValueError(
+                f"state['range_image'] has {n_ch} channels but sensor is configured for n_channels={self.n_channels}"
+            )
+        if n_az != self.h_resolution:
+            raise ValueError(
+                f"state['range_image'] has {n_az} azimuth steps but sensor is configured "
+                f"for h_resolution={self.h_resolution}"
+            )
 
         # 0. Beam divergence: Gaussian blur models mixed-pixel / edge-bleeding
         #    effect caused by finite beam solid angle.  Only applied when

@@ -235,6 +235,8 @@ class EventCameraModel(BaseSensor):
 
         # Single asarray call — reuse the result for both dtype check and value.
         raw_arr = np.asarray(raw)
+        if raw_arr.ndim not in (2, 3):
+            raise ValueError(f"state['gray'] must be a 2-D or 3-D array, got shape {raw_arr.shape}")
         is_uint8 = raw_arr.dtype == np.uint8
         gray: FloatArray = raw_arr.astype(np.float32)
         if gray.ndim == _NDIM_3D:

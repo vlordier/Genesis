@@ -209,6 +209,10 @@ class GNSSModel(BaseSensor):
         """
         true_pos: Float64Array = np.asarray(state.get("pos", [0.0, 0.0, 0.0]), dtype=np.float64)
         true_vel: Float64Array = np.asarray(state.get("vel", [0.0, 0.0, 0.0]), dtype=np.float64)
+        if true_pos.shape != (3,):
+            raise ValueError(f"state['pos'] must be a 3-element array, got shape {true_pos.shape}")
+        if true_vel.shape != (3,):
+            raise ValueError(f"state['vel'] must be a 3-element array, got shape {true_vel.shape}")
         obstruction = float(state.get("obstruction", 0.0))
 
         # Check jammer zones using pre-converted centre arrays

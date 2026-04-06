@@ -311,6 +311,19 @@ class CameraModel(BaseSensor):
             self._last_obs = {}
             return self._last_obs
 
+        raw = np.asarray(rgb)
+        if raw.ndim not in (2, 3):
+            raise ValueError(f"state['rgb'] must be a 2-D or 3-D array, got shape {raw.shape}")
+        if raw.ndim == 3 and raw.shape[2] not in (1, 3, 4):
+            raise ValueError(f"state['rgb'] must have 1, 3, or 4 channels in the last axis, got shape {raw.shape}")
+        cfg_w, cfg_h = self.resolution
+        input_h = raw.shape[0]
+        input_w = raw.shape[1]
+        if (input_h, input_w) != (cfg_h, cfg_w):
+            raise ValueError(
+                f"state['rgb'] shape ({input_h}, {input_w}) does not match configured resolution (h={cfg_h}, w={cfg_w})"
+            )
+
         img = self._to_float(rgb)
 
         # 1. Lens distortion

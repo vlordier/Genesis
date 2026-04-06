@@ -95,11 +95,25 @@ class SensorScheduler:
             Mapping ``sensor_name -> observation_dict``.  Sensors that
             were not due for an update contribute their cached
             ``get_observation()`` result.
+
+        Raises
+        ------
+        RuntimeError
+            If any sensor raises during its ``step()`` call.  The original
+            exception is chained so that the full traceback is preserved.
         """
-        return {
-            name: (sensor.step(sim_time=sim_time, state=state) if sensor.is_due(sim_time) else sensor.get_observation())
-            for name, sensor in self._sensors.items()
-        }
+        obs: dict[str, dict[str, Any]] = {}
+        for name, sensor in self._sensors.items():
+            try:
+                if sensor.is_due(sim_time):
+                    obs[name] = sensor.step(sim_time=sim_time, state=state)
+                else:
+                    obs[name] = sensor.get_observation()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Sensor {name!r} ({type(sensor).__name__}) raised during update at sim_time={sim_time:.6f}: {exc}"
+                ) from exc
+        return obs
 
     # ------------------------------------------------------------------
     # Inspection

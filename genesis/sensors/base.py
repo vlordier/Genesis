@@ -34,6 +34,8 @@ class BaseSensor(ABC):
     """
 
     def __init__(self, name: str = "", update_rate_hz: float = 1.0) -> None:
+        if not isinstance(name, str):
+            raise TypeError(f"name must be a str, got {type(name).__name__!r}")
         if update_rate_hz <= 0:
             raise ValueError(f"update_rate_hz must be positive, got {update_rate_hz}")
         self.name = name or type(self).__name__

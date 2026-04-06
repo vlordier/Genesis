@@ -222,6 +222,10 @@ class IMUModel(BaseSensor):
         """
         true_acc: Float64Array = np.asarray(state.get("lin_acc", [0.0, 0.0, 0.0]), dtype=np.float64)
         true_gyr: Float64Array = np.asarray(state.get("ang_vel", [0.0, 0.0, 0.0]), dtype=np.float64)
+        if true_acc.shape != (3,):
+            raise ValueError(f"state['lin_acc'] must be a 3-element array, got shape {true_acc.shape}")
+        if true_gyr.shape != (3,):
+            raise ValueError(f"state['ang_vel'] must be a 3-element array, got shape {true_gyr.shape}")
 
         # ------------------------------------------------------------------
         # Gravity injection

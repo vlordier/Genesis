@@ -193,8 +193,15 @@ class ThermalCameraModel(BaseSensor):
             return self._last_obs
 
         seg: Int32Array = np.asarray(seg_raw, dtype=np.int32)
+        if seg.ndim not in (2, 3):
+            raise ValueError(f"state['seg'] must be a 2-D or 3-D array, got shape {seg.shape}")
         if seg.ndim == _NDIM_3D:
             seg = seg[..., 0]
+        cfg_w, cfg_h = self.resolution
+        if seg.shape != (cfg_h, cfg_w):
+            raise ValueError(
+                f"state['seg'] shape {seg.shape} does not match configured resolution (h={cfg_h}, w={cfg_w})"
+            )
 
         temp_map: dict[int, float] = state.get("temperature_map", {})
 

@@ -269,6 +269,10 @@ class RadioLinkModel(BaseSensor):
 
         src: Float64Array = np.asarray(src_pos, dtype=np.float64)
         dst: Float64Array = np.asarray(dst_pos, dtype=np.float64)
+        if src.shape != (3,):
+            raise ValueError(f"src_pos must be a 3-element array, got shape {src.shape}")
+        if dst.shape != (3,):
+            raise ValueError(f"dst_pos must be a 3-element array, got shape {dst.shape}")
         dist_m = max(float(np.linalg.norm(dst - src)), _MIN_DISTANCE_M)
 
         rx_power_dbm = self._compute_rx_power(dist_m, has_los=has_los)
@@ -312,6 +316,10 @@ class RadioLinkModel(BaseSensor):
         """
         src: Float64Array = np.asarray(src_pos, dtype=np.float64)
         dst: Float64Array = np.asarray(dst_pos, dtype=np.float64)
+        if src.shape != (3,):
+            raise ValueError(f"src_pos must be a 3-element array, got shape {src.shape}")
+        if dst.shape != (3,):
+            raise ValueError(f"dst_pos must be a 3-element array, got shape {dst.shape}")
         dist_m = max(float(np.linalg.norm(dst - src)), _MIN_DISTANCE_M)
 
         rx_power_dbm = self._compute_rx_power(dist_m, has_los=has_los)
