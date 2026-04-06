@@ -28,6 +28,7 @@ from typing import Any, Final
 import numpy as np
 
 from .base import BaseSensor
+from .types import EventCameraObservation, FloatArray, Polarity
 
 # Minimum intensity value used when computing log-intensity to avoid log(0).
 _LOG_CLIP_MIN: Final[float] = 1e-4
@@ -44,7 +45,7 @@ class Event:
     x: int
     y: int
     timestamp: float
-    polarity: int  # +1 or -1
+    polarity: Polarity  # +1 or -1
 
 
 def pack_events(
@@ -108,10 +109,10 @@ class EventCameraModel(BaseSensor):
         self.background_activity_rate_hz = float(background_activity_rate_hz)
         self._rng = np.random.default_rng(seed=seed)
 
-        self._prev_log: np.ndarray | None = None
-        self._last_fire_time: np.ndarray | None = None  # per-pixel last-event timestamp
-        self._th_pos_map: np.ndarray | None = None  # per-pixel positive threshold
-        self._th_neg_map: np.ndarray | None = None  # per-pixel negative threshold
+        self._prev_log: FloatArray | None = None
+        self._last_fire_time: FloatArray | None = None  # per-pixel last-event timestamp
+        self._th_pos_map: FloatArray | None = None  # per-pixel positive threshold
+        self._th_neg_map: FloatArray | None = None  # per-pixel negative threshold
         self._events: list[Event] = []
 
     # ------------------------------------------------------------------
@@ -135,7 +136,7 @@ class EventCameraModel(BaseSensor):
         self._events = []
         self._last_update_time = -1.0
 
-    def step(self, sim_time: float, state: dict[str, Any]) -> dict[str, Any]:
+    def step(self, sim_time: float, state: dict[str, Any]) -> EventCameraObservation | dict[str, Any]:
         """
         Generate events from a new grayscale frame.
 
@@ -179,8 +180,12 @@ class EventCameraModel(BaseSensor):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _load_gray(state: dict[str, Any]) -> np.ndarray | None:
-        """Extract a normalised float32 grayscale image from *state*."""
+    def _load_gray(state: dict[str, Any]) -> FloatArray | None:
+        """Extract a normalised float32 grayscale image from *state*.
+
+        Checks ``img.dtype`` to determine whether to scale by 1/255 rather
+        than using ``img.max() > 1``, which is unreliable for all-dark images.
+        """
         raw = state.get("gray")
         if raw is None:
             rgb = state.get("rgb")
@@ -188,10 +193,11 @@ class EventCameraModel(BaseSensor):
                 return None
             raw = EventCameraModel._rgb_to_gray(rgb)
 
-        gray = np.asarray(raw, dtype=np.float32)
+        gray: FloatArray = np.asarray(raw, dtype=np.float32)
         if gray.ndim == _NDIM_3D:
             gray = gray[..., 0]
-        if gray.max() > 1.0:
+        # Use dtype to detect uint8 origin; do not rely on max() value
+        if np.asarray(raw).dtype == np.uint8:
             gray = gray / 255.0
         return gray
 
@@ -230,13 +236,16 @@ class EventCameraModel(BaseSensor):
     # Private helpers -- event detection
     # ------------------------------------------------------------------
 
-    def _detect_events(self, log_i: np.ndarray, sim_time: float) -> list[Event]:
+    def _detect_events(self, log_i: FloatArray, sim_time: float) -> list[Event]:
         """Detect positive and negative events from the log-intensity delta."""
-        assert self._prev_log is not None  # guaranteed by step() guard
+        if self._prev_log is None:
+            raise RuntimeError(
+                "_detect_events() called before _prev_log was initialised; call step() with at least one frame first."
+            )
         delta = log_i - self._prev_log
 
-        th_p: np.ndarray | float = self._th_pos_map if self._th_pos_map is not None else self.threshold_pos
-        th_n: np.ndarray | float = self._th_neg_map if self._th_neg_map is not None else self.threshold_neg
+        th_p: FloatArray | float = self._th_pos_map if self._th_pos_map is not None else self.threshold_pos
+        th_n: FloatArray | float = self._th_neg_map if self._th_neg_map is not None else self.threshold_neg
 
         pos_mask = delta > th_p
         neg_mask = delta < -th_n
@@ -263,14 +272,18 @@ class EventCameraModel(BaseSensor):
         ys = self._rng.integers(0, h, n_noise)
         pols = self._rng.choice([-1, 1], n_noise)
         return [
-            Event(x=int(x), y=int(y), timestamp=sim_time, polarity=int(p))
-            for x, y, p in zip(xs, ys, pols, strict=False)
+            Event(x=int(x), y=int(y), timestamp=sim_time, polarity=p) for x, y, p in zip(xs, ys, pols, strict=False)
         ]
 
     @staticmethod
-    def _rgb_to_gray(rgb: np.ndarray) -> np.ndarray:
-        """Convert an RGB image to grayscale using ITU-R BT.709 luma weights."""
-        arr = np.asarray(rgb, dtype=np.float32)
-        if arr.max() > 1.0:
-            arr = arr / 255.0
-        return 0.2126 * arr[..., 0] + 0.7152 * arr[..., 1] + 0.0722 * arr[..., 2]
+    def _rgb_to_gray(rgb: np.ndarray) -> FloatArray:
+        """Convert an RGB image to grayscale using ITU-R BT.709 luma weights.
+
+        Checks dtype to determine scaling rather than using ``arr.max() > 1``.
+        """
+        arr = np.asarray(rgb)
+        is_uint8 = arr.dtype == np.uint8
+        arr_f = arr.astype(np.float32)
+        if is_uint8:
+            arr_f = arr_f / 255.0
+        return (0.2126 * arr_f[..., 0] + 0.7152 * arr_f[..., 1] + 0.0722 * arr_f[..., 2]).astype(np.float32)

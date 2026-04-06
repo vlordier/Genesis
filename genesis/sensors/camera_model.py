@@ -23,6 +23,7 @@ from typing import Any, Final
 import numpy as np
 
 from .base import BaseSensor
+from .types import CameraObservation, FloatArray, UInt8Array
 
 # Sensor-level constants
 _UINT8_MAX: Final[int] = 255
@@ -109,7 +110,7 @@ class CameraModel(BaseSensor):
         self._hot_mask = self._rng.random(n_pixels) < hot_pixel_fraction
 
         self._last_obs: dict[str, Any] = {}
-        self._prev_frame: np.ndarray | None = None  # for rolling-shutter / blur
+        self._prev_frame: FloatArray | None = None  # for rolling-shutter / blur
 
     # ------------------------------------------------------------------
     # BaseSensor interface
@@ -120,7 +121,7 @@ class CameraModel(BaseSensor):
         self._prev_frame = None
         self._last_update_time = -1.0
 
-    def step(self, sim_time: float, state: dict[str, Any]) -> dict[str, Any]:
+    def step(self, sim_time: float, state: dict[str, Any]) -> CameraObservation | dict[str, Any]:
         """
         Apply the full corruption pipeline to ``state["rgb"]``.
 
@@ -162,7 +163,7 @@ class CameraModel(BaseSensor):
         img = self._apply_jpeg(img)
 
         self._prev_frame = img.copy()
-        result = {"rgb": self._to_uint8(img)}
+        result: CameraObservation = {"rgb": self._to_uint8(img)}
         self._last_obs = result
         self._mark_updated(sim_time)
         return result
@@ -175,17 +176,23 @@ class CameraModel(BaseSensor):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _to_float(img: np.ndarray) -> np.ndarray:
-        img = np.asarray(img, dtype=np.float32)
-        if img.max() > _FLOAT_CLIP_MAX:
-            img = img / _UINT8_MAX
-        return img
+    def _to_float(img: np.ndarray) -> FloatArray:
+        """Normalise an image to float32 in [0, 1].
+
+        Uses dtype to decide whether to scale (uint8 → divide by 255) rather
+        than ``img.max() > 1``, which is unreliable for all-dark or corrupted
+        images.
+        """
+        arr = np.asarray(img)
+        if arr.dtype == np.uint8:
+            return (arr.astype(np.float32)) / _UINT8_MAX
+        return arr.astype(np.float32)
 
     @staticmethod
-    def _to_uint8(img: np.ndarray) -> np.ndarray:
+    def _to_uint8(img: np.ndarray) -> UInt8Array:
         return (np.clip(img, _FLOAT_CLIP_MIN, _FLOAT_CLIP_MAX) * _UINT8_MAX).astype(np.uint8)
 
-    def _apply_distortion(self, img: np.ndarray) -> np.ndarray:
+    def _apply_distortion(self, img: FloatArray) -> FloatArray:
         """Apply Brown-Conrady radial + tangential lens distortion."""
         if self.distortion_coeffs is None or len(self.distortion_coeffs) == 0:
             return img
@@ -206,21 +213,24 @@ class CameraModel(BaseSensor):
         except ImportError:
             return img  # graceful degradation when opencv is not available
 
-    def _apply_rolling_shutter(self, img: np.ndarray, prev: np.ndarray) -> np.ndarray:
+    def _apply_rolling_shutter(self, img: FloatArray, prev: FloatArray) -> FloatArray:
         """
         Blend previous and current frame row-by-row to simulate rolling
-        shutter.  The top row is purely from the current frame; the bottom
-        row blends ``rolling_shutter_fraction`` of the previous frame.
+        shutter.
+
+        Uses a vectorised numpy broadcast rather than a Python for-loop:
+        ``alphas`` is shaped ``(H, 1, 1)`` so the blend is applied to all
+        colour channels at once without iteration.
+
+        The top row is purely from the current frame; the bottom row blends
+        ``rolling_shutter_fraction`` of the previous frame.
         """
         h = img.shape[0]
-        alphas = np.linspace(0.0, self.rolling_shutter_fraction, h, dtype=np.float32)
-        blended = np.empty_like(img)
-        for r in range(h):
-            a = alphas[r]
-            blended[r] = (1.0 - a) * img[r] + a * prev[r]
-        return blended
+        # alphas shape: (h,) → broadcast to (h, 1, 1) for (H, W, C) images
+        alphas = np.linspace(0.0, self.rolling_shutter_fraction, h, dtype=np.float32).reshape(h, 1, 1)
+        return ((1.0 - alphas) * img + alphas * prev).astype(np.float32)
 
-    def _apply_motion_blur(self, img: np.ndarray) -> np.ndarray:
+    def _apply_motion_blur(self, img: FloatArray) -> FloatArray:
         """Simple horizontal motion-blur using a uniform 1-D kernel."""
         k = self.motion_blur_kernel * 2 + 1
         kernel = np.ones((1, k), dtype=np.float32) / k
@@ -234,7 +244,7 @@ class CameraModel(BaseSensor):
             out = convolve1d(img, kernel[0], axis=1, mode="reflect")
         return out.astype(np.float32)
 
-    def _apply_noise(self, img: np.ndarray) -> np.ndarray:
+    def _apply_noise(self, img: FloatArray) -> FloatArray:
         """Add Poisson shot noise scaled by ISO and Gaussian read noise."""
         max_electrons = self.full_well_electrons * (self.base_iso / self.iso)
         electrons = img * max_electrons
@@ -244,7 +254,7 @@ class CameraModel(BaseSensor):
         read = self._rng.normal(0.0, self.read_noise_sigma, img.shape).astype(np.float32)
         return np.clip((shot + read) / max_electrons, _FLOAT_CLIP_MIN, _FLOAT_CLIP_MAX)
 
-    def _apply_fixed_pattern_noise(self, img: np.ndarray) -> np.ndarray:
+    def _apply_fixed_pattern_noise(self, img: FloatArray) -> FloatArray:
         """Apply permanently dead (black) and hot (white) pixels."""
         h, w = img.shape[:2]
         flat = img.reshape(h * w, -1)
@@ -252,7 +262,7 @@ class CameraModel(BaseSensor):
         flat[self._hot_mask[: h * w]] = _FLOAT_CLIP_MAX
         return flat.reshape(img.shape)
 
-    def _apply_jpeg(self, img: np.ndarray) -> np.ndarray:
+    def _apply_jpeg(self, img: FloatArray) -> FloatArray:
         """Encode to JPEG and decode back to simulate compression artefacts."""
         if self.jpeg_quality <= 0:
             return img

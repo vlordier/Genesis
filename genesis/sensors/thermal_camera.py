@@ -26,6 +26,7 @@ from typing import Any, Final
 import numpy as np
 
 from .base import BaseSensor
+from .types import FloatArray, Int32Array, ThermalObservation, UInt16Array, UInt8Array
 
 # Number of dimensions for a 3-D image array (H, W, C).
 _NDIM_3D: Final[int] = 3
@@ -105,7 +106,7 @@ class ThermalCameraModel(BaseSensor):
         # Per-pixel NUC offset -- fixed for the sensor lifetime
         self._rng = np.random.default_rng(seed=seed)
         w, h = self.resolution
-        self._nuc_offset = self._rng.normal(0.0, self.nuc_sigma, (h, w)).astype(np.float32)
+        self._nuc_offset: FloatArray = self._rng.normal(0.0, self.nuc_sigma, (h, w)).astype(np.float32)
 
         self._last_obs: dict[str, Any] = {}
 
@@ -117,7 +118,7 @@ class ThermalCameraModel(BaseSensor):
         self._last_obs = {}
         self._last_update_time = -1.0
 
-    def step(self, sim_time: float, state: dict[str, Any]) -> dict[str, Any]:
+    def step(self, sim_time: float, state: dict[str, Any]) -> ThermalObservation | dict[str, Any]:
         """
         Produce a synthetic thermal image.
 
@@ -131,19 +132,19 @@ class ThermalCameraModel(BaseSensor):
         - ``"depth"`` *(optional)* -- ``np.ndarray`` shape ``(H, W)``
           containing per-pixel depth in metres; used for fog attenuation.
         """
-        seg = state.get("seg")
-        if seg is None:
+        seg_raw = state.get("seg")
+        if seg_raw is None:
             self._last_obs = {}
             return self._last_obs
 
-        seg = np.asarray(seg, dtype=np.int32)
+        seg: Int32Array = np.asarray(seg_raw, dtype=np.int32)
         if seg.ndim == _NDIM_3D:
             seg = seg[..., 0]
 
         temp_map: dict[int, float] = state.get("temperature_map", {})
 
         # 1. Build temperature image
-        temp_img = np.full(seg.shape, self.temp_ambient_c, dtype=np.float32)
+        temp_img: FloatArray = np.full(seg.shape, self.temp_ambient_c, dtype=np.float32)
         for entity_id, temp in temp_map.items():
             temp_img[seg == entity_id] = float(temp)
         # Sky pixels
@@ -151,12 +152,12 @@ class ThermalCameraModel(BaseSensor):
 
         # 2. Fog attenuation (hotter objects appear cooler when far away)
         if self.fog_density > 0:
-            depth = state.get("depth")
-            if depth is not None:
-                depth_arr = np.asarray(depth, dtype=np.float32)
+            depth_raw = state.get("depth")
+            if depth_raw is not None:
+                depth_arr: FloatArray = np.asarray(depth_raw, dtype=np.float32)
                 if depth_arr.ndim == _NDIM_3D:
                     depth_arr = depth_arr[..., 0]
-                attenuation = np.exp(-self.fog_density * np.clip(depth_arr, 0, None))
+                attenuation: FloatArray = np.exp(-self.fog_density * np.clip(depth_arr, 0, None))
                 temp_img = temp_img * attenuation + self.temp_ambient_c * (1.0 - attenuation)
 
         # 3. PSF blur
@@ -166,13 +167,13 @@ class ThermalCameraModel(BaseSensor):
         # 4. NUC defects + detector noise
         h, w = temp_img.shape
         nuc = self._nuc_offset[:h, :w]
-        noise = self._rng.normal(0.0, self.noise_sigma, (h, w)).astype(np.float32)
+        noise: FloatArray = self._rng.normal(0.0, self.noise_sigma, (h, w)).astype(np.float32)
         temp_img = temp_img + nuc + noise
 
         # 5. Quantise
         thermal_raw = self._quantise(temp_img)
 
-        result = {"thermal": thermal_raw, "temperature_c": temp_img}
+        result: ThermalObservation = {"thermal": thermal_raw, "temperature_c": temp_img}
         self._last_obs = result
         self._mark_updated(sim_time)
         return result
@@ -185,13 +186,20 @@ class ThermalCameraModel(BaseSensor):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _gaussian_blur(img: np.ndarray, sigma: float) -> np.ndarray:
+    def _gaussian_blur(img: FloatArray, sigma: float) -> FloatArray:
+        """Apply a Gaussian blur with standard deviation *sigma* pixels.
+
+        Uses ``scipy.ndimage.gaussian_filter`` when scipy is available.
+        Falls back to a separable box-filter approximation when scipy is
+        absent — note that a box filter is **not** a true Gaussian blur;
+        it is provided only as a graceful degradation path.
+        """
         try:
             from scipy.ndimage import gaussian_filter
 
             return gaussian_filter(img, sigma=sigma).astype(np.float32)
         except ImportError:
-            # Very rough approximation using a box filter
+            # Box-filter approximation (not a true Gaussian).
             k = max(1, int(sigma * 2 + 1))
             kernel = np.ones((k, k), dtype=np.float32) / (k * k)
             try:
@@ -201,10 +209,10 @@ class ThermalCameraModel(BaseSensor):
             except ImportError:
                 return img
 
-    def _quantise(self, temp_img: np.ndarray) -> np.ndarray:
+    def _quantise(self, temp_img: FloatArray) -> UInt8Array | UInt16Array:
         """Map temperature to raw sensor counts using a linear scale."""
         t_min, t_max = self.temp_range_c
         levels = 2**self.bit_depth
         raw = np.clip((temp_img - t_min) / (t_max - t_min), 0.0, 1.0) * (levels - 1)
-        dtype = np.uint8 if self.bit_depth <= _UINT8_MAX_BIT_DEPTH else np.uint16
+        dtype: type[np.uint8] | type[np.uint16] = np.uint8 if self.bit_depth <= _UINT8_MAX_BIT_DEPTH else np.uint16
         return raw.astype(dtype)

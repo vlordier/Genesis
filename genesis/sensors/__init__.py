@@ -35,14 +35,31 @@ Quick-start
 from .base import BaseSensor
 from .camera_model import CameraModel
 from .event_camera import Event, EventCameraModel
-from .gnss import GnssFixQuality, GNSSModel
+from .gnss import GNSSModel, GnssFixQuality
 from .lidar import LidarModel, LidarPoint
 from .radio import RadioLinkModel, ScheduledPacket
 from .scheduler import SensorScheduler
 from .suite import SensorSuite
 from .thermal_camera import ThermalCameraModel
+from .types import (
+    ArrayLike,
+    CameraObservation,
+    EventCameraObservation,
+    Float64Array,
+    FloatArray,
+    GnssObservation,
+    Int32Array,
+    JammerZone,
+    LidarObservation,
+    Polarity,
+    RadioObservation,
+    ThermalObservation,
+    UInt16Array,
+    UInt8Array,
+)
 
 __all__ = [
+    # Sensor classes
     "BaseSensor",
     "CameraModel",
     "Event",
@@ -56,4 +73,19 @@ __all__ = [
     "SensorScheduler",
     "SensorSuite",
     "ThermalCameraModel",
+    # Type aliases and TypedDicts
+    "ArrayLike",
+    "CameraObservation",
+    "EventCameraObservation",
+    "Float64Array",
+    "FloatArray",
+    "GnssObservation",
+    "Int32Array",
+    "JammerZone",
+    "LidarObservation",
+    "Polarity",
+    "RadioObservation",
+    "ThermalObservation",
+    "UInt16Array",
+    "UInt8Array",
 ]

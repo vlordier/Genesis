@@ -38,6 +38,7 @@ from typing import Any, Final
 import numpy as np
 
 from .base import BaseSensor
+from .types import ArrayLike, Float64Array, RadioObservation
 
 # Speed of light (m/s)
 _SPEED_OF_LIGHT_M_S: Final[float] = 3e8
@@ -58,8 +59,8 @@ class ScheduledPacket:
     """A packet scheduled for future delivery."""
 
     payload: Any
-    src_pos: np.ndarray
-    dst_pos: np.ndarray
+    src_pos: Float64Array
+    dst_pos: Float64Array
     send_time: float
     delivery_time: float
 
@@ -157,7 +158,7 @@ class RadioLinkModel(BaseSensor):
         self._last_obs = {"delivered": []}
         self._last_update_time = -1.0
 
-    def step(self, sim_time: float, state: dict[str, Any]) -> dict[str, Any]:
+    def step(self, sim_time: float, state: dict[str, Any]) -> RadioObservation | dict[str, Any]:
         """
         Deliver all packets whose scheduled delivery time has passed.
 
@@ -166,7 +167,7 @@ class RadioLinkModel(BaseSensor):
         """
         delivered = [p for p in self._queue if p.delivery_time <= sim_time]
         self._queue = [p for p in self._queue if p.delivery_time > sim_time]
-        result = {"delivered": delivered, "queue_depth": self.queue_depth}
+        result: RadioObservation = {"delivered": delivered, "queue_depth": self.queue_depth}
         self._last_obs = result
         self._mark_updated(sim_time)
         return result
@@ -181,8 +182,8 @@ class RadioLinkModel(BaseSensor):
     def transmit(
         self,
         packet: Any,
-        src_pos: np.ndarray,
-        dst_pos: np.ndarray,
+        src_pos: ArrayLike,
+        dst_pos: ArrayLike,
         sim_time: float,
         *,
         has_los: bool = True,
@@ -195,7 +196,7 @@ class RadioLinkModel(BaseSensor):
         packet:
             Arbitrary payload.
         src_pos, dst_pos:
-            3-D world-frame positions in metres.
+            3-D world-frame positions in metres (any array-like accepted).
         sim_time:
             Current simulation time in seconds.
         has_los:
@@ -211,9 +212,9 @@ class RadioLinkModel(BaseSensor):
         if self.los_required and not has_los:
             return None
 
-        src_pos = np.asarray(src_pos, dtype=np.float64)
-        dst_pos = np.asarray(dst_pos, dtype=np.float64)
-        dist_m = max(float(np.linalg.norm(dst_pos - src_pos)), _MIN_DISTANCE_M)
+        src: Float64Array = np.asarray(src_pos, dtype=np.float64)
+        dst: Float64Array = np.asarray(dst_pos, dtype=np.float64)
+        dist_m = max(float(np.linalg.norm(dst - src)), _MIN_DISTANCE_M)
 
         rx_power_dbm = self._compute_rx_power(dist_m, has_los=has_los)
         snr_db = rx_power_dbm - self._noise_floor_dbm
@@ -229,8 +230,8 @@ class RadioLinkModel(BaseSensor):
 
         pkt = ScheduledPacket(
             payload=packet,
-            src_pos=src_pos,
-            dst_pos=dst_pos,
+            src_pos=src,
+            dst_pos=dst,
             send_time=sim_time,
             delivery_time=delivery_time,
         )
@@ -243,8 +244,8 @@ class RadioLinkModel(BaseSensor):
 
     def estimate_link_metrics(
         self,
-        src_pos: np.ndarray,
-        dst_pos: np.ndarray,
+        src_pos: ArrayLike,
+        dst_pos: ArrayLike,
         *,
         has_los: bool = True,
     ) -> dict[str, float]:
@@ -254,9 +255,9 @@ class RadioLinkModel(BaseSensor):
         Useful for monitoring / visualisation.  ``has_los`` must be passed
         as a keyword argument.
         """
-        src_pos = np.asarray(src_pos, dtype=np.float64)
-        dst_pos = np.asarray(dst_pos, dtype=np.float64)
-        dist_m = max(float(np.linalg.norm(dst_pos - src_pos)), _MIN_DISTANCE_M)
+        src: Float64Array = np.asarray(src_pos, dtype=np.float64)
+        dst: Float64Array = np.asarray(dst_pos, dtype=np.float64)
+        dist_m = max(float(np.linalg.norm(dst - src)), _MIN_DISTANCE_M)
 
         rx_power_dbm = self._compute_rx_power(dist_m, has_los=has_los)
         snr_db = rx_power_dbm - self._noise_floor_dbm

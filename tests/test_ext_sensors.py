@@ -29,8 +29,8 @@ from genesis.sensors import (
 _RGB_CHANNELS = 3
 # Expected number of columns in a LiDAR point-cloud row: x, y, z, intensity
 _LIDAR_POINT_COLS = 4
-# Expected number of dimensions for a 2-D point cloud
-_LIDAR_NDIM = 2
+# Expected number of dimensions (axes) in the point-cloud ndarray
+_LIDAR_ARRAY_NDIM = 2
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +287,7 @@ class TestLidarModel:
         ri = _make_range_image(16, 360)
         obs = lidar.step(0.0, {"range_image": ri})
         assert "points" in obs
-        assert obs["points"].ndim == _LIDAR_NDIM
+        assert obs["points"].ndim == _LIDAR_ARRAY_NDIM
         assert obs["points"].shape[1] == _LIDAR_POINT_COLS
 
     def test_no_range_image(self) -> None:

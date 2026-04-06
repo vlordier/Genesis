@@ -1,0 +1,139 @@
+"""
+Shared type aliases, TypedDicts, and numpy array type helpers for
+the Genesis external sensor realism layer.
+
+These types serve two purposes:
+
+1. **Static type checking** — IDEs and ``mypy`` can infer precise
+   types for array shapes and observation dict keys.
+2. **Documentation** — TypedDicts make the expected shape of every
+   sensor's state input and observation output explicit.
+
+All TypedDicts use ``total=False`` for *state* dicts (callers may omit
+any field) and ``total=True`` (the default) for *observation* dicts
+(every field is always present in a successful update).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
+
+import numpy as np
+import numpy.typing as npt
+
+if TYPE_CHECKING:
+    pass  # future imports only needed at check-time go here
+
+# ---------------------------------------------------------------------------
+# Generic NDArray aliases
+# ---------------------------------------------------------------------------
+
+#: A float32 NumPy array of arbitrary shape.
+FloatArray = npt.NDArray[np.float32]
+#: A float64 NumPy array of arbitrary shape.
+Float64Array = npt.NDArray[np.float64]
+#: A uint8 NumPy array of arbitrary shape.
+UInt8Array = npt.NDArray[np.uint8]
+#: A uint16 NumPy array of arbitrary shape.
+UInt16Array = npt.NDArray[np.uint16]
+#: An int32 NumPy array of arbitrary shape.
+Int32Array = npt.NDArray[np.int32]
+#: Re-export numpy's ArrayLike for convenience.
+ArrayLike = npt.ArrayLike
+#: Valid polarities for a DVS event.
+Polarity = Literal[-1, 1]
+#: A jammer zone is a (centre_xyz, radius_m) pair.
+JammerZone = tuple[ArrayLike, float]
+
+# ---------------------------------------------------------------------------
+# Camera model
+# ---------------------------------------------------------------------------
+
+
+class CameraObservation(TypedDict):
+    """Observation emitted by :class:`~genesis.sensors.CameraModel`."""
+
+    rgb: UInt8Array  # shape (H, W, 3)
+
+
+# ---------------------------------------------------------------------------
+# Event camera model
+# ---------------------------------------------------------------------------
+
+
+class EventCameraObservation(TypedDict):
+    """Observation emitted by :class:`~genesis.sensors.EventCameraModel`."""
+
+    events: list[Any]  # list[Event]; forward-ref avoids circular import
+
+
+# ---------------------------------------------------------------------------
+# Thermal camera model
+# ---------------------------------------------------------------------------
+
+
+class ThermalObservation(TypedDict):
+    """Observation emitted by :class:`~genesis.sensors.ThermalCameraModel`."""
+
+    thermal: UInt8Array | UInt16Array  # shape (H, W); dtype depends on bit_depth
+    temperature_c: FloatArray  # shape (H, W) — pre-quantisation temperature
+
+
+# ---------------------------------------------------------------------------
+# LiDAR model
+# ---------------------------------------------------------------------------
+
+
+class LidarObservation(TypedDict):
+    """Observation emitted by :class:`~genesis.sensors.LidarModel`."""
+
+    points: FloatArray  # shape (N, 4) — x, y, z, intensity
+    range_image: FloatArray  # shape (n_channels, h_resolution) — processed ranges
+
+
+# ---------------------------------------------------------------------------
+# GNSS model
+# ---------------------------------------------------------------------------
+
+
+class GnssObservation(TypedDict):
+    """Observation emitted by :class:`~genesis.sensors.GNSSModel`."""
+
+    pos: Float64Array  # shape (3,) — noisy world-frame position (m)
+    vel: Float64Array  # shape (3,) — noisy world-frame velocity (m/s)
+    pos_llh: Float64Array  # shape (3,) — latitude (deg), longitude (deg), altitude (m)
+    fix_quality: int  # GnssFixQuality value
+    n_satellites: int
+    hdop: float
+
+
+# ---------------------------------------------------------------------------
+# Radio link model
+# ---------------------------------------------------------------------------
+
+
+class RadioObservation(TypedDict):
+    """Observation emitted by :class:`~genesis.sensors.RadioLinkModel`."""
+
+    delivered: list[Any]  # list[ScheduledPacket]; forward-ref avoids circular import
+    queue_depth: int
+
+
+__all__ = [
+    # Array type aliases
+    "ArrayLike",
+    "Float64Array",
+    "FloatArray",
+    "Int32Array",
+    "JammerZone",
+    "Polarity",
+    "UInt16Array",
+    "UInt8Array",
+    # Observation TypedDicts
+    "CameraObservation",
+    "EventCameraObservation",
+    "GnssObservation",
+    "LidarObservation",
+    "RadioObservation",
+    "ThermalObservation",
+]

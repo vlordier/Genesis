@@ -41,6 +41,7 @@ from typing import Any, Final
 import numpy as np
 
 from .base import BaseSensor
+from .types import FloatArray, LidarObservation
 
 # Beams with two-way transmission below this fraction are treated as no-return.
 _MIN_TRANSMISSION_FRACTION: Final[float] = 0.05
@@ -142,10 +143,24 @@ class LidarModel(BaseSensor):
 
         # Elevation angles for each channel
         elev_min, elev_max = self.v_fov_deg
-        self._elevations_deg = np.linspace(elev_min, elev_max, self.n_channels, dtype=np.float32)
+        self._elevations_deg: FloatArray = np.linspace(elev_min, elev_max, self.n_channels, dtype=np.float32)
 
         # Azimuth angles for each horizontal step
-        self._azimuths_deg = np.linspace(0.0, 360.0, self.h_resolution, endpoint=False, dtype=np.float32)
+        self._azimuths_deg: FloatArray = np.linspace(0.0, 360.0, self.h_resolution, endpoint=False, dtype=np.float32)
+
+        # Pre-compute trigonometric values for the fixed beam geometry.
+        # These are constant for the lifetime of the sensor; caching avoids
+        # repeated deg2rad + trig calls on every step().
+        elev_rad = np.deg2rad(self._elevations_deg)
+        azim_rad = np.deg2rad(self._azimuths_deg)
+        # elev_grid: (n_channels, h_resolution); azim_grid: (n_channels, h_resolution)
+        self._elev_grid: FloatArray
+        self._azim_grid: FloatArray
+        self._elev_grid, self._azim_grid = np.meshgrid(elev_rad, azim_rad, indexing="ij")
+        self._cos_elev: FloatArray = np.cos(self._elev_grid).astype(np.float32)
+        self._sin_elev: FloatArray = np.sin(self._elev_grid).astype(np.float32)
+        self._cos_azim: FloatArray = np.cos(self._azim_grid).astype(np.float32)
+        self._sin_azim: FloatArray = np.sin(self._azim_grid).astype(np.float32)
 
         self._last_obs: dict[str, Any] = {}
 
@@ -157,7 +172,7 @@ class LidarModel(BaseSensor):
         self._last_obs = {}
         self._last_update_time = -1.0
 
-    def step(self, sim_time: float, state: dict[str, Any]) -> dict[str, Any]:
+    def step(self, sim_time: float, state: dict[str, Any]) -> LidarObservation | dict[str, Any]:
         """
         Convert an ideal range image into a realistic point cloud.
 
@@ -220,23 +235,26 @@ class LidarModel(BaseSensor):
             1.0,
         ).astype(np.float32)
 
-        # 7. Convert to Cartesian coordinates
-        elevs = np.deg2rad(self._elevations_deg[:n_ch])
-        azims = np.deg2rad(self._azimuths_deg[:n_az])
-        elev_grid, azim_grid = np.meshgrid(elevs, azims, indexing="ij")
-        r = range_img
+        # 7. Convert to Cartesian coordinates using pre-cached trig arrays.
+        # Slice to the actual input size in case range_image is smaller than
+        # the configured (n_channels, h_resolution).
+        cos_elev = self._cos_elev[:n_ch, :n_az]
+        sin_elev = self._sin_elev[:n_ch, :n_az]
+        cos_azim = self._cos_azim[:n_ch, :n_az]
+        sin_azim = self._sin_azim[:n_ch, :n_az]
 
-        x = r * np.cos(elev_grid) * np.cos(azim_grid)
-        y = r * np.cos(elev_grid) * np.sin(azim_grid)
-        z = r * np.sin(elev_grid)
+        r = range_img
+        x = r * cos_elev * cos_azim
+        y = r * cos_elev * sin_azim
+        z = r * sin_elev
 
         # 8. Pack into Nx4 array
-        points = np.stack(
+        points: FloatArray = np.stack(
             [x[valid_mask], y[valid_mask], z[valid_mask], intensity_img[valid_mask]],
             axis=-1,
         ).astype(np.float32)
 
-        result = {"points": points, "range_image": range_img}
+        result: LidarObservation = {"points": points, "range_image": range_img}
         self._last_obs = result
         self._mark_updated(sim_time)
         return result
