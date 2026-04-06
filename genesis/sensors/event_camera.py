@@ -330,3 +330,6 @@ class EventCameraModel(BaseSensor):
         if is_uint8:
             arr_f = arr_f / 255.0
         return (0.2126 * arr_f[..., 0] + 0.7152 * arr_f[..., 1] + 0.0722 * arr_f[..., 2]).astype(np.float32)
+
+
+__all__ = ["Event", "EventCameraModel"]
