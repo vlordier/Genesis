@@ -12,6 +12,7 @@ Public API
     BaseSensor
     CameraModel
     EventCameraModel
+    IMUModel
     ThermalCameraModel
     LidarModel
     GNSSModel
