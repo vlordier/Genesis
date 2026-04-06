@@ -301,14 +301,6 @@ NOVATEL_OEM7 = GNSSConfig(
 # Registry and helpers
 # ---------------------------------------------------------------------------
 
-# Category → list of preset names; used by list_presets(kind=...).
-_PRESET_CATEGORIES: dict[str, list[str]] = {
-    "camera": ["GOPRO_HERO11_4K30", "INTEL_D435_RGB", "RASPBERRY_PI_V2", "ZED2_LEFT"],
-    "lidar": ["LIVOX_AVIA", "OUSTER_OS1_64", "VELODYNE_HDL64E", "VELODYNE_VLP16"],
-    "imu": ["PIXHAWK_ICM20689", "VECTORNAV_VN100", "XSENS_MTI_3"],
-    "gnss": ["NOVATEL_OEM7", "UBLOX_F9P_RTK", "UBLOX_M8N"],
-}
-
 _REGISTRY: dict[str, PresetConfig] = {
     # Cameras
     "RASPBERRY_PI_V2": RASPBERRY_PI_V2,
@@ -329,6 +321,22 @@ _REGISTRY: dict[str, PresetConfig] = {
     "UBLOX_F9P_RTK": UBLOX_F9P_RTK,
     "NOVATEL_OEM7": NOVATEL_OEM7,
 }
+
+# Category → list of preset names; built dynamically from _REGISTRY config types
+# so that adding a new preset only requires an entry in _REGISTRY.
+_CONFIG_TYPE_TO_KIND: dict[type, str] = {
+    CameraConfig: "camera",
+    LidarConfig: "lidar",
+    IMUConfig: "imu",
+    GNSSConfig: "gnss",
+}
+
+_PRESET_CATEGORIES: dict[str, list[str]] = {kind: [] for kind in _CONFIG_TYPE_TO_KIND.values()}
+for _name, _cfg in _REGISTRY.items():
+    _kind = _CONFIG_TYPE_TO_KIND.get(type(_cfg))
+    if _kind is not None:
+        _PRESET_CATEGORIES[_kind].append(_name)
+del _name, _cfg, _kind  # clean up loop variables from module namespace
 
 
 def list_presets(kind: str | None = None) -> list[str]:
