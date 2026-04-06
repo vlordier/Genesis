@@ -39,8 +39,9 @@ if TYPE_CHECKING:
 
 # Physical constants
 _EARTH_RADIUS_M: Final[float] = 6_378_137.0
-# Minimum metres-per-degree-longitude to guard against division by zero at the poles.
-_MIN_M_PER_DEG_LON: Final[float] = 1.0
+# Minimum metres-per-degree-longitude to guard against division by zero at the poles
+# (cos(90°) ≈ 0 → _m_per_deg_lon → 0 → exploding lon values in flat-earth conversion).
+_POLAR_SINGULARITY_MIN_M_PER_DEG_LON: Final[float] = 1.0
 # Fallback HDOP reported when there is no fix or inside a jammer zone.
 _HDOP_NO_FIX: Final[float] = 99.9
 # Nominal satellites visible at zero obstruction.
@@ -130,7 +131,7 @@ class GNSSModel(BaseSensor):
         self._m_per_deg_lat = math.pi * _EARTH_RADIUS_M / 180.0
         self._m_per_deg_lon = max(
             self._m_per_deg_lat * math.cos(math.radians(self.origin_llh[0])),
-            _MIN_M_PER_DEG_LON,
+            _POLAR_SINGULARITY_MIN_M_PER_DEG_LON,
         )
 
         # ------------------------------------------------------------------

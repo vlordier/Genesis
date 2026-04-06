@@ -340,7 +340,8 @@ class CameraModel(BaseSensor):
         # The masks were built for the configured (w×h) resolution.  If the
         # input image has a different pixel count, boolean indexing would raise
         # an IndexError (when larger) or silently apply a partial mask (when
-        # smaller).  Guard both cases explicitly.
+        # smaller).  Skip noise application when resolution differs; the caller
+        # is responsible for passing correctly-sized images.
         if n != len(self._dead_mask):
             return img
         flat = img.reshape(n, -1)
