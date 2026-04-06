@@ -330,9 +330,37 @@ _REGISTRY: dict[str, PresetConfig] = {
 }
 
 
-def list_presets() -> list[str]:
-    """Return a sorted list of all available preset names."""
-    return sorted(_REGISTRY)
+def list_presets(kind: str | None = None) -> list[str]:
+    """
+    Return a sorted list of all available preset names.
+
+    Parameters
+    ----------
+    kind:
+        Optional sensor-type filter.  Accepted values: ``"camera"``,
+        ``"lidar"``, ``"imu"``, ``"gnss"``.  When *None* (default) all
+        presets are returned.
+
+    Raises
+    ------
+    KeyError
+        If *kind* is not a recognised sensor category.
+
+    Examples
+    --------
+    ::
+
+        list_presets()                # all 14 presets, sorted
+        list_presets(kind="lidar")    # ["LIVOX_AVIA", "OUSTER_OS1_64", ...]
+        list_presets(kind="gnss")     # ["NOVATEL_OEM7", "UBLOX_F9P_RTK", "UBLOX_M8N"]
+    """
+    if kind is None:
+        return sorted(_REGISTRY)
+    key = kind.lower()
+    if key not in _PRESET_CATEGORIES:
+        available = ", ".join(sorted(_PRESET_CATEGORIES))
+        raise KeyError(f"Unknown sensor kind {kind!r}.  Available kinds: {available}")
+    return sorted(_PRESET_CATEGORIES[key])
 
 
 def get_preset(name: str) -> PresetConfig:
