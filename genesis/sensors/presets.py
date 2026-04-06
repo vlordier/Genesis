@@ -2,9 +2,10 @@
 Real-world sensor presets for the Genesis sensor layer.
 
 Each constant is a fully-validated ``*Config`` instance whose parameters are
-taken from publicly available datasheets.  They are intentionally read-only
-(Pydantic ``model_config = ConfigDict(frozen=True)`` is set on every config
-class) and can therefore be shared across experiments without mutation risk.
+taken from publicly available datasheets.  They are module-level singletons
+and should be treated as read-only; pass them directly to the corresponding
+sensor's ``from_config()`` factory or copy-with-changes via
+``model.model_copy(update={...})`` before mutating.
 
 Usage
 -----
