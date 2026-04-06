@@ -109,6 +109,9 @@ class EventCameraModel(BaseSensor):
         self.background_activity_rate_hz = float(background_activity_rate_hz)
         self._rng = np.random.default_rng(seed=seed)
 
+        # Pre-compute frame interval (used in background activity rate calculation).
+        self._dt: float = 1.0 / self.update_rate_hz
+
         self._prev_log: FloatArray | None = None
         self._last_fire_time: FloatArray | None = None  # per-pixel last-event timestamp
         self._th_pos_map: FloatArray | None = None  # per-pixel positive threshold
@@ -183,8 +186,9 @@ class EventCameraModel(BaseSensor):
     def _load_gray(state: dict[str, Any]) -> FloatArray | None:
         """Extract a normalised float32 grayscale image from *state*.
 
-        Checks ``img.dtype`` to determine whether to scale by 1/255 rather
-        than using ``img.max() > 1``, which is unreliable for all-dark images.
+        Calls ``np.asarray`` only once on the raw input and checks its dtype
+        to determine whether to scale by 1/255 (uint8 origin), rather than
+        relying on ``img.max() > 1`` which is unreliable for all-dark images.
         """
         raw = state.get("gray")
         if raw is None:
@@ -193,11 +197,13 @@ class EventCameraModel(BaseSensor):
                 return None
             raw = EventCameraModel._rgb_to_gray(rgb)
 
-        gray: FloatArray = np.asarray(raw, dtype=np.float32)
+        # Single asarray call — reuse the result for both dtype check and value.
+        raw_arr = np.asarray(raw)
+        is_uint8 = raw_arr.dtype == np.uint8
+        gray: FloatArray = raw_arr.astype(np.float32)
         if gray.ndim == _NDIM_3D:
             gray = gray[..., 0]
-        # Use dtype to detect uint8 origin; do not rely on max() value
-        if np.asarray(raw).dtype == np.uint8:
+        if is_uint8:
             gray = gray / 255.0
         return gray
 
@@ -263,8 +269,8 @@ class EventCameraModel(BaseSensor):
         """Generate spontaneous background-activity noise events."""
         if self.background_activity_rate_hz <= 0:
             return []
-        dt = 1.0 / self.update_rate_hz
-        mean_noise = self.background_activity_rate_hz * h * w * dt
+        # Use pre-computed _dt instead of 1.0 / self.update_rate_hz each call.
+        mean_noise = self.background_activity_rate_hz * h * w * self._dt
         n_noise = int(self._rng.poisson(mean_noise))
         if n_noise == 0:
             return []

@@ -25,13 +25,14 @@ Usage
 
 from __future__ import annotations
 
+import math
 from enum import IntEnum
 from typing import Any, Final
 
 import numpy as np
 
 from .base import BaseSensor
-from .types import ArrayLike, Float64Array, GnssObservation, JammerZone
+from .types import Float64Array, GnssObservation, JammerZone
 
 # Physical constants
 _EARTH_RADIUS_M: Final[float] = 6_378_137.0
@@ -119,8 +120,23 @@ class GNSSModel(BaseSensor):
         self._rng = np.random.default_rng(seed=seed)
 
         # Earth radius and degrees-per-metre factors (flat-earth ENU approximation).
-        self._m_per_deg_lat = np.pi * _EARTH_RADIUS_M / 180.0
-        self._m_per_deg_lon = self._m_per_deg_lat * np.cos(np.deg2rad(self.origin_llh[0]))
+        self._m_per_deg_lat = math.pi * _EARTH_RADIUS_M / 180.0
+        self._m_per_deg_lon = self._m_per_deg_lat * math.cos(math.radians(self.origin_llh[0]))
+
+        # ------------------------------------------------------------------
+        # Pre-computed Gauss-Markov coefficients (constant for fixed update rate)
+        # ------------------------------------------------------------------
+        self._dt: float = 1.0 / self.update_rate_hz
+        self._alpha: float = math.exp(-self._dt / self.bias_tau_s)
+        # Steady-state noise injection per step: sigma * sqrt(1 - alpha^2)
+        self._drive_sigma: float = self.bias_sigma_m * math.sqrt(1.0 - self._alpha**2)
+
+        # Pre-convert jammer zone centres to numpy arrays to avoid repeated
+        # np.asarray() calls inside the hot step() loop.
+        self._jammer_centres: list[Float64Array] = [
+            np.asarray(centre, dtype=np.float64) for centre, _ in self.jammer_zones
+        ]
+        self._jammer_radii: list[float] = [float(r) for _, r in self.jammer_zones]
 
         self._bias: Float64Array = np.zeros(3, dtype=np.float64)
         self._last_obs: dict[str, Any] = {}
@@ -158,10 +174,9 @@ class GNSSModel(BaseSensor):
         true_vel: Float64Array = np.asarray(state.get("vel", [0.0, 0.0, 0.0]), dtype=np.float64)
         obstruction = float(state.get("obstruction", 0.0))
 
-        # Check jammer zones
-        for zone_centre, radius in self.jammer_zones:
-            centre_arr: Float64Array = np.asarray(zone_centre, dtype=np.float64)
-            if np.linalg.norm(true_pos - centre_arr) <= radius:
+        # Check jammer zones using pre-converted centre arrays
+        for centre_arr, radius in zip(self._jammer_centres, self._jammer_radii):
+            if float(np.linalg.norm(true_pos - centre_arr)) <= radius:
                 result: GnssObservation = {
                     "pos": true_pos.copy(),
                     "vel": true_vel.copy(),
@@ -174,11 +189,9 @@ class GNSSModel(BaseSensor):
                 self._mark_updated(sim_time)
                 return result
 
-        # Update bias random walk (Gauss-Markov)
-        dt = 1.0 / self.update_rate_hz
-        alpha = float(np.exp(-dt / self.bias_tau_s))
-        drive_sigma = self.bias_sigma_m * float(np.sqrt(1.0 - alpha**2))
-        self._bias = alpha * self._bias + self._rng.normal(0.0, drive_sigma, 3)
+        # Update bias random walk (Gauss-Markov) using pre-computed coefficients
+        alpha = self._alpha
+        self._bias = alpha * self._bias + self._rng.normal(0.0, self._drive_sigma, 3)
 
         # Position error: white noise + Gauss-Markov bias + multipath
         white: Float64Array = self._rng.normal(0.0, self.noise_m, 3)
@@ -196,13 +209,12 @@ class GNSSModel(BaseSensor):
         alt = float(true_pos[2])
         fix_quality = GnssFixQuality.AUTONOMOUS if alt >= self.min_fix_altitude_m else GnssFixQuality.NO_FIX
         n_sat = int(
-            np.clip(
-                _BASE_SATELLITES - round(obstruction * _SAT_LOSS_PER_OBSTRUCTION),
-                0,
+            min(
+                max(_BASE_SATELLITES - round(obstruction * _SAT_LOSS_PER_OBSTRUCTION), 0),
                 _MAX_SATELLITES,
             )
         )
-        hdop = float(np.clip(_HDOP_MIN + obstruction * _HDOP_OBSTRUCTION_SLOPE, _HDOP_MIN, _HDOP_MAX))
+        hdop = min(max(_HDOP_MIN + obstruction * _HDOP_OBSTRUCTION_SLOPE, _HDOP_MIN), _HDOP_MAX)
 
         # Convert ENU XYZ to lat/lon/height (flat-earth approximation).
         # ENU convention: x=East → longitude, y=North → latitude.

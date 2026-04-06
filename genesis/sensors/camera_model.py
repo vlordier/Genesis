@@ -109,6 +109,57 @@ class CameraModel(BaseSensor):
         self._dead_mask = self._rng.random(n_pixels) < dead_pixel_fraction
         self._hot_mask = self._rng.random(n_pixels) < hot_pixel_fraction
 
+        # ------------------------------------------------------------------
+        # Pre-computed constants (avoid repeated arithmetic inside step())
+        # ------------------------------------------------------------------
+
+        # Exposure gain: multiplied onto the float image every frame.
+        self._gain: float = self.iso / self.base_iso
+        # Full-well capacity at effective ISO: used in the shot-noise model.
+        self._max_electrons: float = self.full_well_electrons * (self.base_iso / self.iso)
+
+        # Rolling-shutter blend weights, shape (H, 1, 1).  Pre-computed for
+        # the configured resolution height; recomputed lazily if the actual
+        # input height differs.
+        self._rs_h: int = h
+        self._rs_alphas: FloatArray = np.linspace(0.0, self.rolling_shutter_fraction, h, dtype=np.float32).reshape(
+            h, 1, 1
+        )
+
+        # Motion-blur 1-D kernel, shape (1, k).  Only materialised when
+        # motion_blur_kernel > 0.
+        if self.motion_blur_kernel > 0:
+            k = self.motion_blur_kernel * 2 + 1
+            self._blur_kernel: FloatArray | None = np.ones((1, k), dtype=np.float32) / k
+        else:
+            self._blur_kernel = None
+
+        # Lens distortion remapping maps (cv2).  Computed once here to avoid
+        # the expensive initUndistortRectifyMap call on every frame.
+        self._dist_map1: np.ndarray | None = None
+        self._dist_map2: np.ndarray | None = None
+        if self.distortion_coeffs is not None and len(self.distortion_coeffs) > 0:
+            try:
+                import cv2
+
+                fw, fh = self.resolution
+                focal = float(max(fw, fh))
+                cx, cy = fw / 2.0, fh / 2.0
+                camera_matrix = np.array(
+                    [[focal, 0.0, cx], [0.0, focal, cy], [0.0, 0.0, 1.0]],
+                    dtype=np.float32,
+                )
+                self._dist_map1, self._dist_map2 = cv2.initUndistortRectifyMap(
+                    camera_matrix,
+                    self.distortion_coeffs,
+                    None,
+                    camera_matrix,
+                    (fw, fh),
+                    cv2.CV_32FC1,
+                )
+            except ImportError:
+                pass  # graceful degradation — distortion skipped
+
         self._last_obs: dict[str, Any] = {}
         self._prev_frame: FloatArray | None = None  # for rolling-shutter / blur
 
@@ -146,12 +197,11 @@ class CameraModel(BaseSensor):
             img = self._apply_rolling_shutter(img, self._prev_frame)
 
         # 3. Motion blur
-        if self.motion_blur_kernel > 0:
+        if self._blur_kernel is not None:
             img = self._apply_motion_blur(img)
 
-        # 4. Exposure / gain
-        gain = self.iso / self.base_iso
-        img = np.clip(img * gain, _FLOAT_CLIP_MIN, _FLOAT_CLIP_MAX)
+        # 4. Exposure / gain (use pre-computed scalar)
+        img = np.clip(img * self._gain, _FLOAT_CLIP_MIN, _FLOAT_CLIP_MAX)
 
         # 5. Noise (Poisson shot + Gaussian read)
         img = self._apply_noise(img)
@@ -185,7 +235,7 @@ class CameraModel(BaseSensor):
         """
         arr = np.asarray(img)
         if arr.dtype == np.uint8:
-            return (arr.astype(np.float32)) / _UINT8_MAX
+            return arr.astype(np.float32) / _UINT8_MAX
         return arr.astype(np.float32)
 
     @staticmethod
@@ -193,66 +243,60 @@ class CameraModel(BaseSensor):
         return (np.clip(img, _FLOAT_CLIP_MIN, _FLOAT_CLIP_MAX) * _UINT8_MAX).astype(np.uint8)
 
     def _apply_distortion(self, img: FloatArray) -> FloatArray:
-        """Apply Brown-Conrady radial + tangential lens distortion."""
-        if self.distortion_coeffs is None or len(self.distortion_coeffs) == 0:
+        """Apply Brown-Conrady radial + tangential lens distortion.
+
+        Uses pre-computed remapping maps when available (computed at
+        construction time).  Falls back gracefully when cv2 is absent or
+        ``distortion_coeffs`` was not provided.
+        """
+        if self._dist_map1 is None or self._dist_map2 is None:
             return img
         try:
-            import cv2  # optional dependency
+            import cv2
 
-            h, w = img.shape[:2]
-            # Build a simple camera matrix centred in the image
-            focal = float(max(w, h))
-            cx, cy = w / 2.0, h / 2.0
-            camera_matrix = np.array(
-                [[focal, 0.0, cx], [0.0, focal, cy], [0.0, 0.0, 1.0]],
-                dtype=np.float32,
-            )
-            dist = self.distortion_coeffs
-            map1, map2 = cv2.initUndistortRectifyMap(camera_matrix, dist, None, camera_matrix, (w, h), cv2.CV_32FC1)
-            return cv2.remap(img, map1, map2, interpolation=cv2.INTER_LINEAR)
+            return cv2.remap(img, self._dist_map1, self._dist_map2, interpolation=cv2.INTER_LINEAR)
         except ImportError:
-            return img  # graceful degradation when opencv is not available
+            return img
 
     def _apply_rolling_shutter(self, img: FloatArray, prev: FloatArray) -> FloatArray:
         """
         Blend previous and current frame row-by-row to simulate rolling
         shutter.
 
-        Uses a vectorised numpy broadcast rather than a Python for-loop:
-        ``alphas`` is shaped ``(H, 1, 1)`` so the blend is applied to all
-        colour channels at once without iteration.
-
-        The top row is purely from the current frame; the bottom row blends
-        ``rolling_shutter_fraction`` of the previous frame.
+        Uses a vectorised numpy broadcast.  The alpha weights are pre-computed
+        for the configured height and recomputed lazily if the actual input
+        height differs.
         """
         h = img.shape[0]
-        # alphas shape: (h,) → broadcast to (h, 1, 1) for (H, W, C) images
-        alphas = np.linspace(0.0, self.rolling_shutter_fraction, h, dtype=np.float32).reshape(h, 1, 1)
+        if h != self._rs_h:
+            # Input height differs from configured — recompute alphas.
+            self._rs_h = h
+            self._rs_alphas = np.linspace(0.0, self.rolling_shutter_fraction, h, dtype=np.float32).reshape(h, 1, 1)
+        alphas = self._rs_alphas
         return ((1.0 - alphas) * img + alphas * prev).astype(np.float32)
 
     def _apply_motion_blur(self, img: FloatArray) -> FloatArray:
-        """Simple horizontal motion-blur using a uniform 1-D kernel."""
-        k = self.motion_blur_kernel * 2 + 1
-        kernel = np.ones((1, k), dtype=np.float32) / k
+        """Simple horizontal motion-blur using the pre-built uniform 1-D kernel."""
+        assert self._blur_kernel is not None
         try:
             import cv2
 
-            out = cv2.filter2D(img, -1, kernel)
+            out = cv2.filter2D(img, -1, self._blur_kernel)
         except ImportError:
             from scipy.ndimage import convolve1d
 
-            out = convolve1d(img, kernel[0], axis=1, mode="reflect")
+            out = convolve1d(img, self._blur_kernel[0], axis=1, mode="reflect")
         return out.astype(np.float32)
 
     def _apply_noise(self, img: FloatArray) -> FloatArray:
         """Add Poisson shot noise scaled by ISO and Gaussian read noise."""
-        max_electrons = self.full_well_electrons * (self.base_iso / self.iso)
-        electrons = img * max_electrons
+        # _max_electrons is pre-computed at init: full_well * (base_iso / iso)
+        electrons = img * self._max_electrons
         # Shot noise (Poisson)
         shot = self._rng.poisson(np.clip(electrons, 0, None)).astype(np.float32)
         # Read noise
         read = self._rng.normal(0.0, self.read_noise_sigma, img.shape).astype(np.float32)
-        return np.clip((shot + read) / max_electrons, _FLOAT_CLIP_MIN, _FLOAT_CLIP_MAX)
+        return np.clip((shot + read) / self._max_electrons, _FLOAT_CLIP_MIN, _FLOAT_CLIP_MAX)
 
     def _apply_fixed_pattern_noise(self, img: FloatArray) -> FloatArray:
         """Apply permanently dead (black) and hot (white) pixels."""

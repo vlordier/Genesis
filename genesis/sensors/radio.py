@@ -32,6 +32,7 @@ Usage
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -135,7 +136,20 @@ class RadioLinkModel(BaseSensor):
         self._rng = np.random.default_rng(seed=seed)
 
         # kTB noise floor at 290 K, 1 MHz bandwidth -> ~-114 dBm/MHz
-        self._noise_floor_dbm = _THERMAL_NOISE_DBM_PER_HZ + 10 * np.log10(_REF_BANDWIDTH_HZ) + self.noise_figure_db
+        self._noise_floor_dbm: float = (
+            _THERMAL_NOISE_DBM_PER_HZ + 10.0 * math.log10(_REF_BANDWIDTH_HZ) + self.noise_figure_db
+        )
+
+        # ------------------------------------------------------------------
+        # Pre-computed free-space path loss constant
+        # ------------------------------------------------------------------
+        # FSPL = 20*log10(4π/λ) + 10*n*log10(d)
+        # The first term depends only on frequency (constant) and is cached.
+        freq_hz = self.frequency_ghz * 1e9
+        lambda_m = _SPEED_OF_LIGHT_M_S / freq_hz
+        self._fspl_const_db: float = 20.0 * math.log10(4.0 * math.pi / lambda_m)
+        # Pre-compute the PER sigmoid denominator guard
+        self._snr_transition_safe: float = max(float(snr_transition_db), 1e-3)
 
         self._queue: list[ScheduledPacket] = []
         self._last_obs: dict[str, Any] = {"delivered": []}
@@ -165,9 +179,13 @@ class RadioLinkModel(BaseSensor):
         The *state* dict is not used by this model but kept for API
         consistency with other sensors.
         """
-        delivered = [p for p in self._queue if p.delivery_time <= sim_time]
-        self._queue = [p for p in self._queue if p.delivery_time > sim_time]
-        result: RadioObservation = {"delivered": delivered, "queue_depth": self.queue_depth}
+        # Single-pass partition: avoid two list comprehensions over the queue.
+        delivered: list[ScheduledPacket] = []
+        remaining: list[ScheduledPacket] = []
+        for pkt in self._queue:
+            (delivered if pkt.delivery_time <= sim_time else remaining).append(pkt)
+        self._queue = remaining
+        result: RadioObservation = {"delivered": delivered, "queue_depth": len(remaining)}
         self._last_obs = result
         self._mark_updated(sim_time)
         return result
@@ -225,7 +243,7 @@ class RadioLinkModel(BaseSensor):
 
         # Latency + jitter
         propagation_s = dist_m / _SPEED_OF_LIGHT_M_S
-        jitter = float(abs(self._rng.normal(0.0, self.jitter_sigma_s)))
+        jitter = abs(float(self._rng.normal(0.0, self.jitter_sigma_s)))
         delivery_time = sim_time + self.base_latency_s + propagation_s + jitter
 
         pkt = ScheduledPacket(
@@ -276,19 +294,23 @@ class RadioLinkModel(BaseSensor):
     # ------------------------------------------------------------------
 
     def _compute_rx_power(self, dist_m: float, *, has_los: bool) -> float:
-        """Compute received power in dBm for a given distance and LoS flag."""
-        freq_hz = self.frequency_ghz * 1e9
-        lambda_m = _SPEED_OF_LIGHT_M_S / freq_hz
-        fspl_db = 20 * np.log10(4 * np.pi / lambda_m)
-        pl_db = fspl_db + 10 * self.path_loss_exponent * np.log10(dist_m)
+        """Compute received power in dBm for a given distance and LoS flag.
+
+        Uses pre-computed ``_fspl_const_db`` (depends only on frequency) and
+        the standard library ``math.log10`` (faster than numpy for scalars).
+        """
+        pl_db = self._fspl_const_db + 10.0 * self.path_loss_exponent * math.log10(dist_m)
         if not has_los:
             pl_db += self.nlos_excess_loss_db
         shadow_db = float(self._rng.normal(0.0, self.shadowing_sigma_db))
         return self.tx_power_dbm - pl_db - shadow_db
 
     def _snr_to_per(self, snr_db: float) -> float:
-        """Sigmoid mapping from SNR to packet error rate."""
+        """Sigmoid mapping from SNR to packet error rate.
+
+        Uses ``math.exp`` (faster than numpy for scalar inputs).
+        """
         # PER -> 0 at high SNR, -> 1 at low SNR
-        x = -(snr_db - self.min_snr_db) / max(self.snr_transition_db, 1e-3)
-        per = 1.0 / (1.0 + np.exp(-x * _PER_SIGMOID_STEEPNESS))
-        return float(np.clip(per, 0.0, 1.0))
+        x = -(snr_db - self.min_snr_db) / self._snr_transition_safe
+        per = 1.0 / (1.0 + math.exp(-x * _PER_SIGMOID_STEEPNESS))
+        return min(max(per, 0.0), 1.0)

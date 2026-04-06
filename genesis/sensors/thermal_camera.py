@@ -36,6 +36,20 @@ _DEFAULT_LWIR_TEMP_MAX_C: Final[float] = 140.0
 # Bit-depth boundary below which uint8 is used for output.
 _UINT8_MAX_BIT_DEPTH: Final[int] = 8
 
+# ---------------------------------------------------------------------------
+# Optional scipy import -- attempted once at module load to avoid repeated
+# try/except blocks in the hot step() path.
+# ---------------------------------------------------------------------------
+try:
+    from scipy.ndimage import gaussian_filter as _scipy_gaussian_filter
+    from scipy.ndimage import convolve as _scipy_convolve
+
+    _SCIPY_AVAILABLE: Final[bool] = True
+except ImportError:
+    _scipy_gaussian_filter = None  # type: ignore[assignment]
+    _scipy_convolve = None  # type: ignore[assignment]
+    _SCIPY_AVAILABLE: Final[bool] = False  # type: ignore[misc]
+
 
 class ThermalCameraModel(BaseSensor):
     """
@@ -107,6 +121,19 @@ class ThermalCameraModel(BaseSensor):
         self._rng = np.random.default_rng(seed=seed)
         w, h = self.resolution
         self._nuc_offset: FloatArray = self._rng.normal(0.0, self.nuc_sigma, (h, w)).astype(np.float32)
+
+        # ------------------------------------------------------------------
+        # Pre-computed quantisation constants
+        # ------------------------------------------------------------------
+        t_min, t_max = self.temp_range_c
+        self._quantise_levels: int = 2**self.bit_depth
+        # Avoid division in _quantise() by pre-computing the reciprocal scale.
+        t_range = t_max - t_min
+        self._quantise_inv_range: float = 1.0 / t_range if t_range != 0.0 else 1.0
+        self._quantise_t_min: float = t_min
+        self._quantise_dtype: type[np.uint8] | type[np.uint16] = (
+            np.uint8 if self.bit_depth <= _UINT8_MAX_BIT_DEPTH else np.uint16
+        )
 
         self._last_obs: dict[str, Any] = {}
 
@@ -189,30 +216,28 @@ class ThermalCameraModel(BaseSensor):
     def _gaussian_blur(img: FloatArray, sigma: float) -> FloatArray:
         """Apply a Gaussian blur with standard deviation *sigma* pixels.
 
-        Uses ``scipy.ndimage.gaussian_filter`` when scipy is available.
+        Uses the module-level ``_scipy_gaussian_filter`` import (resolved once
+        at import time) to avoid repeated try/except overhead per frame.
         Falls back to a separable box-filter approximation when scipy is
         absent — note that a box filter is **not** a true Gaussian blur;
         it is provided only as a graceful degradation path.
         """
-        try:
-            from scipy.ndimage import gaussian_filter
-
-            return gaussian_filter(img, sigma=sigma).astype(np.float32)
-        except ImportError:
-            # Box-filter approximation (not a true Gaussian).
-            k = max(1, int(sigma * 2 + 1))
-            kernel = np.ones((k, k), dtype=np.float32) / (k * k)
-            try:
-                from scipy.ndimage import convolve
-
-                return convolve(img, kernel).astype(np.float32)
-            except ImportError:
-                return img
+        if _SCIPY_AVAILABLE and _scipy_gaussian_filter is not None:
+            return _scipy_gaussian_filter(img, sigma=sigma).astype(np.float32)
+        # Box-filter approximation (not a true Gaussian).
+        k = max(1, int(sigma * 2 + 1))
+        kernel = np.ones((k, k), dtype=np.float32) / (k * k)
+        if _SCIPY_AVAILABLE and _scipy_convolve is not None:
+            return _scipy_convolve(img, kernel).astype(np.float32)
+        return img
 
     def _quantise(self, temp_img: FloatArray) -> UInt8Array | UInt16Array:
-        """Map temperature to raw sensor counts using a linear scale."""
-        t_min, t_max = self.temp_range_c
-        levels = 2**self.bit_depth
-        raw = np.clip((temp_img - t_min) / (t_max - t_min), 0.0, 1.0) * (levels - 1)
-        dtype: type[np.uint8] | type[np.uint16] = np.uint8 if self.bit_depth <= _UINT8_MAX_BIT_DEPTH else np.uint16
-        return raw.astype(dtype)
+        """Map temperature to raw sensor counts using a linear scale.
+
+        Uses pre-computed constants (_quantise_t_min, _quantise_inv_range,
+        _quantise_levels, _quantise_dtype) to avoid division in the hot path.
+        """
+        raw = np.clip((temp_img - self._quantise_t_min) * self._quantise_inv_range, 0.0, 1.0) * (
+            self._quantise_levels - 1
+        )
+        return raw.astype(self._quantise_dtype)
