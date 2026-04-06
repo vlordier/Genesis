@@ -8,9 +8,11 @@ and applies a realistic cascade of sensor artefacts:
 2. Rolling-shutter smear
 3. Motion blur
 4. Exposure / gain mapping
-5. Shot noise + read noise (Poisson + Gaussian)
-6. Dead / hot pixels
-7. JPEG-style compression artefacts (optional)
+5. Vignetting (radial intensity fall-off)
+6. Lateral chromatic aberration (channel shift)
+7. Shot noise + read noise (Poisson + Gaussian)
+8. Dead / hot pixels
+9. JPEG-style compression artefacts (optional)
 
 All operations are applied on NumPy ``uint8`` / ``float32`` arrays so that
 the model remains backend-agnostic and can run without a GPU.
