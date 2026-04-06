@@ -46,6 +46,7 @@ Quick-start (config-driven)
     print(cfg.model_dump_json(indent=2))  # serialise to JSON
 """
 
+from . import presets
 from .base import BaseSensor
 from .camera_model import CameraModel
 from .config import (
@@ -63,6 +64,24 @@ from .gnss import GNSSModel, GnssFixQuality
 from .imu import IMUModel
 from .lidar import LidarModel, LidarPoint
 from .radio import RadioLinkModel, ScheduledPacket
+from .presets import (
+    GOPRO_HERO11_4K30,
+    INTEL_D435_RGB,
+    LIVOX_AVIA,
+    NOVATEL_OEM7,
+    OUSTER_OS1_64,
+    PIXHAWK_ICM20689,
+    RASPBERRY_PI_V2,
+    UBLOX_F9P_RTK,
+    UBLOX_M8N,
+    VELODYNE_HDL64E,
+    VELODYNE_VLP16,
+    VECTORNAV_VN100,
+    XSENS_MTI_3,
+    ZED2_LEFT,
+    get_preset,
+    list_presets,
+)
 from .scheduler import SensorScheduler
 from .suite import SensorSuite
 from .thermal_camera import ThermalCameraModel
@@ -86,6 +105,29 @@ from .types import (
 )
 
 __all__ = [
+    # Sensor presets module
+    "presets",
+    # Preset constants — cameras
+    "GOPRO_HERO11_4K30",
+    "INTEL_D435_RGB",
+    "RASPBERRY_PI_V2",
+    "ZED2_LEFT",
+    # Preset constants — LiDAR
+    "LIVOX_AVIA",
+    "OUSTER_OS1_64",
+    "VELODYNE_HDL64E",
+    "VELODYNE_VLP16",
+    # Preset constants — IMU
+    "PIXHAWK_ICM20689",
+    "VECTORNAV_VN100",
+    "XSENS_MTI_3",
+    # Preset constants — GNSS
+    "NOVATEL_OEM7",
+    "UBLOX_F9P_RTK",
+    "UBLOX_M8N",
+    # Preset helpers
+    "get_preset",
+    "list_presets",
     # Sensor classes
     "BaseSensor",
     "CameraModel",

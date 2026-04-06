@@ -1159,9 +1159,7 @@ class TestCameraCA:
         obs = cam.step(0.0, {"rgb": rgb})
         out = obs["rgb"].astype(np.float32)
         # Without CA, R/G/B means should be nearly equal (only noise varies).
-        assert abs(out[..., 0].mean() - out[..., 2].mean()) < 15.0, (
-            "Without CA, R and B channel means should be close"
-        )
+        assert abs(out[..., 0].mean() - out[..., 2].mean()) < 15.0, "Without CA, R and B channel means should be close"
 
     def test_ca_config_round_trip(self) -> None:
         from genesis.sensors import CameraModel
@@ -1274,3 +1272,173 @@ class TestSensorSuiteWithIMU:
 
         cfg = SensorSuiteConfig.full()
         assert cfg.imu is not None
+
+
+# ---------------------------------------------------------------------------
+# Sensor presets
+# ---------------------------------------------------------------------------
+
+
+class TestSensorPresets:
+    """Tests for genesis.sensors.presets — no scene.build() required."""
+
+    # --- list_presets / get_preset helpers ----------------------------------
+
+    def test_list_presets_non_empty(self) -> None:
+        from genesis.sensors.presets import list_presets
+
+        names = list_presets()
+        assert len(names) > 0
+
+    def test_list_presets_sorted(self) -> None:
+        from genesis.sensors.presets import list_presets
+
+        names = list_presets()
+        assert names == sorted(names)
+
+    def test_get_preset_case_insensitive(self) -> None:
+        from genesis.sensors.presets import get_preset
+
+        cfg_upper = get_preset("VELODYNE_VLP16")
+        cfg_lower = get_preset("velodyne_vlp16")
+        assert cfg_upper == cfg_lower
+
+    def test_get_preset_unknown_raises(self) -> None:
+        from genesis.sensors.presets import get_preset
+
+        with pytest.raises(KeyError, match="Unknown sensor preset"):
+            get_preset("DOES_NOT_EXIST")
+
+    # --- All presets have a positive update_rate_hz -------------------------
+
+    @pytest.mark.parametrize(
+        "preset_name",
+        [
+            "RASPBERRY_PI_V2",
+            "INTEL_D435_RGB",
+            "GOPRO_HERO11_4K30",
+            "ZED2_LEFT",
+            "VELODYNE_VLP16",
+            "VELODYNE_HDL64E",
+            "OUSTER_OS1_64",
+            "LIVOX_AVIA",
+            "PIXHAWK_ICM20689",
+            "VECTORNAV_VN100",
+            "XSENS_MTI_3",
+            "UBLOX_M8N",
+            "UBLOX_F9P_RTK",
+            "NOVATEL_OEM7",
+        ],
+    )
+    def test_all_presets_positive_rate(self, preset_name: str) -> None:
+        from genesis.sensors.presets import get_preset
+
+        cfg = get_preset(preset_name)
+        assert cfg.update_rate_hz > 0
+
+    # --- Camera presets -----------------------------------------------------
+
+    def test_camera_preset_json_round_trip(self) -> None:
+        from genesis.sensors.presets import RASPBERRY_PI_V2
+
+        json_str = RASPBERRY_PI_V2.model_dump_json()
+        cfg2 = CameraConfig.model_validate_json(json_str)
+        assert cfg2.update_rate_hz == RASPBERRY_PI_V2.update_rate_hz
+        assert cfg2.rolling_shutter_fraction == RASPBERRY_PI_V2.rolling_shutter_fraction
+
+    def test_camera_preset_from_config(self) -> None:
+        from genesis.sensors.presets import INTEL_D435_RGB
+
+        cam = CameraModel.from_config(INTEL_D435_RGB)
+        assert cam.update_rate_hz == INTEL_D435_RGB.update_rate_hz
+        assert cam.resolution == INTEL_D435_RGB.resolution
+
+    def test_raspberry_pi_rolling_shutter_nonzero(self) -> None:
+        from genesis.sensors.presets import RASPBERRY_PI_V2
+
+        assert RASPBERRY_PI_V2.rolling_shutter_fraction > 0.0
+
+    def test_all_camera_presets_positive_resolution(self) -> None:
+        from genesis.sensors.presets import GOPRO_HERO11_4K30, INTEL_D435_RGB, RASPBERRY_PI_V2, ZED2_LEFT
+
+        for preset in (RASPBERRY_PI_V2, INTEL_D435_RGB, GOPRO_HERO11_4K30, ZED2_LEFT):
+            w, h = preset.resolution
+            assert w > 0 and h > 0
+
+    # --- LiDAR presets ------------------------------------------------------
+
+    def test_lidar_preset_json_round_trip(self) -> None:
+        from genesis.sensors.presets import VELODYNE_VLP16
+
+        json_str = VELODYNE_VLP16.model_dump_json()
+        cfg2 = LidarConfig.model_validate_json(json_str)
+        assert cfg2.n_channels == VELODYNE_VLP16.n_channels
+        assert cfg2.max_range_m == VELODYNE_VLP16.max_range_m
+
+    def test_lidar_preset_from_config(self) -> None:
+        from genesis.sensors.presets import OUSTER_OS1_64
+
+        lidar = LidarModel.from_config(OUSTER_OS1_64)
+        assert lidar.n_channels == OUSTER_OS1_64.n_channels
+        assert lidar.update_rate_hz == OUSTER_OS1_64.update_rate_hz
+
+    def test_all_lidar_presets_valid_vfov(self) -> None:
+        from genesis.sensors.presets import LIVOX_AVIA, OUSTER_OS1_64, VELODYNE_HDL64E, VELODYNE_VLP16
+
+        for preset in (VELODYNE_VLP16, VELODYNE_HDL64E, OUSTER_OS1_64, LIVOX_AVIA):
+            lo, hi = preset.v_fov_deg
+            assert lo < hi
+
+    # --- IMU presets --------------------------------------------------------
+
+    def test_imu_preset_json_round_trip(self) -> None:
+        from genesis.sensors.presets import PIXHAWK_ICM20689
+
+        json_str = PIXHAWK_ICM20689.model_dump_json()
+        cfg2 = IMUConfig.model_validate_json(json_str)
+        assert cfg2.noise_density_acc == pytest.approx(PIXHAWK_ICM20689.noise_density_acc)
+        assert cfg2.update_rate_hz == PIXHAWK_ICM20689.update_rate_hz
+
+    def test_imu_preset_from_config(self) -> None:
+        from genesis.sensors.presets import VECTORNAV_VN100
+
+        imu = IMUModel.from_config(VECTORNAV_VN100)
+        assert imu.update_rate_hz == VECTORNAV_VN100.update_rate_hz
+
+    def test_all_imu_presets_positive_noise_density(self) -> None:
+        from genesis.sensors.presets import PIXHAWK_ICM20689, VECTORNAV_VN100, XSENS_MTI_3
+
+        for preset in (PIXHAWK_ICM20689, VECTORNAV_VN100, XSENS_MTI_3):
+            assert preset.noise_density_acc > 0
+            assert preset.noise_density_gyr > 0
+
+    # --- GNSS presets -------------------------------------------------------
+
+    def test_gnss_preset_json_round_trip(self) -> None:
+        from genesis.sensors.presets import UBLOX_M8N
+
+        json_str = UBLOX_M8N.model_dump_json()
+        cfg2 = GNSSConfig.model_validate_json(json_str)
+        assert cfg2.noise_m == pytest.approx(UBLOX_M8N.noise_m)
+        assert cfg2.update_rate_hz == UBLOX_M8N.update_rate_hz
+
+    def test_gnss_preset_from_config(self) -> None:
+        from genesis.sensors.presets import UBLOX_F9P_RTK
+
+        gnss = GNSSModel.from_config(UBLOX_F9P_RTK)
+        assert gnss.update_rate_hz == UBLOX_F9P_RTK.update_rate_hz
+
+    def test_rtk_preset_lower_noise_than_standalone(self) -> None:
+        from genesis.sensors.presets import UBLOX_F9P_RTK, UBLOX_M8N
+
+        assert UBLOX_F9P_RTK.noise_m < UBLOX_M8N.noise_m
+
+    # --- Top-level re-exports -----------------------------------------------
+
+    def test_top_level_import(self) -> None:
+        import genesis.sensors as gs
+
+        assert hasattr(gs, "get_preset")
+        assert hasattr(gs, "list_presets")
+        assert hasattr(gs, "presets")
+        assert hasattr(gs, "VELODYNE_VLP16")
