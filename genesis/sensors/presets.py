@@ -27,15 +27,13 @@ Sources are cited inline as ``# Source: <URL or spec>``.
 
 from __future__ import annotations
 
-from typing import Union
-
 from .config import CameraConfig, GNSSConfig, IMUConfig, LidarConfig
 
 # ---------------------------------------------------------------------------
 # Type alias for all preset config types
 # ---------------------------------------------------------------------------
 
-PresetConfig = Union[CameraConfig, LidarConfig, IMUConfig, GNSSConfig]
+PresetConfig = CameraConfig | LidarConfig | IMUConfig | GNSSConfig
 
 # ---------------------------------------------------------------------------
 # Camera presets
