@@ -35,6 +35,7 @@ Usage
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
@@ -191,8 +192,6 @@ class LidarModel(BaseSensor):
         self._bd_sigma_az: float = 0.0
         self._bd_sigma_el: float = 0.0
         if self.beam_divergence_mrad > 0.0 and self.n_channels > 1:
-            import math
-
             az_res_mrad = 360.0 / self.h_resolution * (math.pi / 180.0) * 1000.0
             el_span_mrad = abs(self.v_fov_deg[1] - self.v_fov_deg[0]) * (math.pi / 180.0) * 1000.0
             el_res_mrad = el_span_mrad / max(self.n_channels - 1, 1)
