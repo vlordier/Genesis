@@ -39,13 +39,11 @@ Example
     import genesis as gs
     from genesis.sensors import SensorSuite
 
-    suite = SensorSuite.default(scene, rig=drone)
-    scene.build()
+    suite = SensorSuite.default()
+    suite.reset()
 
-    while True:
-        scene.step()
-        state = build_state(scene, drone, cam)
-        obs = suite.step(scene.cur_t, state)
+    # inside the simulation loop
+    obs = suite.step(scene.cur_t, state)
 """
 
 from __future__ import annotations

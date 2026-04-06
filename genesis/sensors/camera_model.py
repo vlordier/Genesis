@@ -76,6 +76,7 @@ class CameraModel(BaseSensor):
         dead_pixel_fraction: float = 0.0001,
         hot_pixel_fraction: float = 0.00005,
         jpeg_quality: int = 0,
+        seed: int | None = None,
     ) -> None:
         super().__init__(name=name, update_rate_hz=update_rate_hz)
         self.resolution = tuple(resolution)
@@ -88,7 +89,7 @@ class CameraModel(BaseSensor):
         self.jpeg_quality = int(jpeg_quality)
 
         w, h = self.resolution
-        rng = np.random.default_rng(seed=42)
+        rng = np.random.default_rng(seed=seed)
         n_pixels = w * h
         self._dead_mask = rng.random(n_pixels) < dead_pixel_fraction
         self._hot_mask = rng.random(n_pixels) < hot_pixel_fraction

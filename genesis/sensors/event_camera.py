@@ -84,6 +84,7 @@ class EventCameraModel(BaseSensor):
         refractory_period_s: float = 0.0,
         threshold_variation: float = 0.0,
         background_activity_rate_hz: float = 0.0,
+        seed: int | None = None,
     ) -> None:
         super().__init__(name=name, update_rate_hz=update_rate_hz)
         self.threshold_pos = float(threshold_pos)
@@ -91,6 +92,7 @@ class EventCameraModel(BaseSensor):
         self.refractory_period_s = float(refractory_period_s)
         self.threshold_variation = float(threshold_variation)
         self.background_activity_rate_hz = float(background_activity_rate_hz)
+        self._seed = seed
 
         self._prev_log: np.ndarray | None = None
         self._last_fire_time: np.ndarray | None = None  # per-pixel last-event timestamp
@@ -144,7 +146,7 @@ class EventCameraModel(BaseSensor):
             return {"events": self._events}
 
         if self.threshold_variation > 0 and (self._th_pos_map is None or self._th_pos_map.shape != (h, w)):
-            rng = np.random.default_rng(seed=0)
+            rng = np.random.default_rng(seed=self._seed)
             sigma_p = self.threshold_variation * self.threshold_pos
             sigma_n = self.threshold_variation * self.threshold_neg
             self._th_pos_map = np.clip(rng.normal(self.threshold_pos, sigma_p, (h, w)).astype(np.float32), 0.01, None)

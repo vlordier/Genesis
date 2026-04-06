@@ -37,16 +37,19 @@ def _make_rgb(h: int = 64, w: int = 64) -> np.ndarray:
 
 
 def _make_gray(h: int = 64, w: int = 64) -> np.ndarray:
+    """Return a random float32 grayscale image with values in [0, 1]."""
     rng = np.random.default_rng(seed=0)
     return rng.random((h, w)).astype(np.float32)
 
 
 def _make_seg(h: int = 64, w: int = 64, n_entities: int = 3) -> np.ndarray:
+    """Return a random integer segmentation mask with entity IDs in [0, n_entities)."""
     rng = np.random.default_rng(seed=0)
     return rng.integers(0, n_entities, (h, w), dtype=np.int32)
 
 
 def _make_range_image(n_ch: int = 16, n_az: int = 360) -> np.ndarray:
+    """Return a random float32 range image (n_channels × h_resolution) with ranges in [1, 50] m."""
     rng = np.random.default_rng(seed=0)
     return rng.uniform(1.0, 50.0, (n_ch, n_az)).astype(np.float32)
 

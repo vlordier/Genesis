@@ -74,6 +74,7 @@ class ThermalCameraModel(BaseSensor):
         noise_sigma: float = 0.05,
         bit_depth: int = 14,
         fog_density: float = 0.0,
+        seed: int | None = None,
     ) -> None:
         super().__init__(name=name, update_rate_hz=update_rate_hz)
         self.resolution = tuple(resolution)
@@ -86,7 +87,7 @@ class ThermalCameraModel(BaseSensor):
         self.fog_density = float(fog_density)
 
         # Per-pixel NUC offset – fixed for the sensor lifetime
-        rng = np.random.default_rng(seed=7)
+        rng = np.random.default_rng(seed=seed)
         w, h = self.resolution
         self._nuc_offset = rng.normal(0.0, self.nuc_sigma, (h, w)).astype(np.float32)
 
