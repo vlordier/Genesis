@@ -922,7 +922,7 @@ class TestSuiteConfigCombinations:
         suite = SensorSuite.from_config(cfg)
         names = suite.sensor_names()
         for key, val in sensor_kwargs.items():
-            expected_name = key if key != "rgb" else "rgb"
+            expected_name = key
             if val is not None:
                 assert expected_name in names, f"{expected_name} should be in suite"
             else:

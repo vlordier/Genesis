@@ -257,11 +257,11 @@ class ThermalCameraModel(BaseSensor):
         absent — note that a box filter is **not** a true Gaussian blur;
         it is provided only as a graceful degradation path.
         """
-        if _SCIPY_AVAILABLE and _scipy_gaussian_filter is not None:
+        if _scipy_gaussian_filter is not None:
             return _scipy_gaussian_filter(img, sigma=sigma).astype(np.float32)
         # Box-filter fallback via separable 1-D convolutions (numpy only).
-        # Previous code had a dead `if _SCIPY_AVAILABLE` guard here that
-        # always evaluated False, causing the unblurred image to be returned.
+        # A box filter is **not** a true Gaussian blur; it is provided only as
+        # a graceful degradation path when scipy is unavailable.
         k = max(1, int(sigma * 2 + 1))
         box = np.ones(k, dtype=np.float32) / k
         out = np.apply_along_axis(lambda r: np.convolve(r, box, mode="same"), axis=1, arr=img)
