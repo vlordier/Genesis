@@ -1433,6 +1433,58 @@ class TestSensorPresets:
 
         assert UBLOX_F9P_RTK.noise_m < UBLOX_M8N.noise_m
 
+    # --- list_presets(kind=...) -------------------------------------------
+
+    def test_list_presets_kind_camera(self) -> None:
+        from genesis.sensors.presets import list_presets
+
+        names = list_presets(kind="camera")
+        assert len(names) == 4
+        assert "RASPBERRY_PI_V2" in names
+        assert all(n in list_presets() for n in names)
+
+    def test_list_presets_kind_lidar(self) -> None:
+        from genesis.sensors.presets import list_presets
+
+        names = list_presets(kind="lidar")
+        assert len(names) == 4
+        assert "VELODYNE_VLP16" in names
+
+    def test_list_presets_kind_imu(self) -> None:
+        from genesis.sensors.presets import list_presets
+
+        names = list_presets(kind="imu")
+        assert len(names) == 3
+        assert "PIXHAWK_ICM20689" in names
+
+    def test_list_presets_kind_gnss(self) -> None:
+        from genesis.sensors.presets import list_presets
+
+        names = list_presets(kind="gnss")
+        assert len(names) == 3
+        assert "UBLOX_M8N" in names
+
+    def test_list_presets_kind_case_insensitive(self) -> None:
+        from genesis.sensors.presets import list_presets
+
+        assert list_presets(kind="LIDAR") == list_presets(kind="lidar")
+
+    def test_list_presets_kind_unknown_raises(self) -> None:
+        from genesis.sensors.presets import list_presets
+
+        with pytest.raises(KeyError, match="Unknown sensor kind"):
+            list_presets(kind="radar")
+
+    def test_list_presets_kind_covers_all(self) -> None:
+        """Union of all per-kind lists must equal the full list."""
+        from genesis.sensors.presets import list_presets
+
+        all_names = set(list_presets())
+        by_kind = set()
+        for kind in ("camera", "lidar", "imu", "gnss"):
+            by_kind.update(list_presets(kind=kind))
+        assert by_kind == all_names
+
     # --- Top-level re-exports -----------------------------------------------
 
     def test_top_level_import(self) -> None:
@@ -1442,3 +1494,4 @@ class TestSensorPresets:
         assert hasattr(gs, "list_presets")
         assert hasattr(gs, "presets")
         assert hasattr(gs, "VELODYNE_VLP16")
+        assert hasattr(gs, "PresetConfig")
