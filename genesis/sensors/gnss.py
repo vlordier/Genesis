@@ -27,12 +27,15 @@ from __future__ import annotations
 
 import math
 from enum import IntEnum
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 
 from .base import BaseSensor
 from .types import Float64Array, GnssObservation, JammerZone
+
+if TYPE_CHECKING:
+    from .config import GNSSConfig
 
 # Physical constants
 _EARTH_RADIUS_M: Final[float] = 6_378_137.0
@@ -140,6 +143,32 @@ class GNSSModel(BaseSensor):
 
         self._bias: Float64Array = np.zeros(3, dtype=np.float64)
         self._last_obs: dict[str, Any] = {}
+
+    # ------------------------------------------------------------------
+    # Config factory
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_config(cls, config: "GNSSConfig") -> "GNSSModel":
+        """Construct a :class:`GNSSModel` from a :class:`~genesis.sensors.config.GNSSConfig`."""
+        return cls(**config.model_dump())
+
+    def get_config(self) -> "GNSSConfig":
+        """Return the current parameters as a :class:`~genesis.sensors.config.GNSSConfig`."""
+        from .config import GNSSConfig
+
+        return GNSSConfig(
+            name=self.name,
+            update_rate_hz=self.update_rate_hz,
+            noise_m=self.noise_m,
+            vel_noise_ms=self.vel_noise_ms,
+            bias_tau_s=self.bias_tau_s,
+            bias_sigma_m=self.bias_sigma_m,
+            multipath_sigma_m=self.multipath_sigma_m,
+            min_fix_altitude_m=self.min_fix_altitude_m,
+            jammer_zones=list(self.jammer_zones),
+            origin_llh=self.origin_llh,
+        )
 
     # ------------------------------------------------------------------
     # Public properties

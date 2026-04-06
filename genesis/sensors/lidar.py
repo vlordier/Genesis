@@ -36,12 +36,15 @@ Usage
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 
 from .base import BaseSensor
 from .types import FloatArray, LidarObservation
+
+if TYPE_CHECKING:
+    from .config import LidarConfig
 
 # Beams with two-way transmission below this fraction are treated as no-return.
 _MIN_TRANSMISSION_FRACTION: Final[float] = 0.05
@@ -55,9 +58,14 @@ _RAIN_ATTN_EXPONENT: Final[float] = 0.6
 _DB_TO_NP: Final[float] = 4.343
 
 
-@dataclass
+@dataclass(frozen=True)
 class LidarPoint:
-    """One LiDAR return (utility dataclass for typed point construction)."""
+    """
+    One LiDAR return (utility dataclass for typed point construction).
+
+    Frozen so that point objects can be stored in sets or used as dict
+    keys and cannot be accidentally mutated after recording.
+    """
 
     x: float
     y: float
@@ -163,6 +171,35 @@ class LidarModel(BaseSensor):
         self._sin_azim: FloatArray = np.sin(self._azim_grid).astype(np.float32)
 
         self._last_obs: dict[str, Any] = {}
+
+    # ------------------------------------------------------------------
+    # Config factory
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_config(cls, config: "LidarConfig") -> "LidarModel":
+        """Construct a :class:`LidarModel` from a :class:`~genesis.sensors.config.LidarConfig`."""
+        return cls(**config.model_dump())
+
+    def get_config(self) -> "LidarConfig":
+        """Return the current parameters as a :class:`~genesis.sensors.config.LidarConfig`."""
+        from .config import LidarConfig
+
+        return LidarConfig(
+            name=self.name,
+            update_rate_hz=self.update_rate_hz,
+            n_channels=self.n_channels,
+            v_fov_deg=self.v_fov_deg,
+            h_resolution=self.h_resolution,
+            max_range_m=self.max_range_m,
+            no_hit_value=self.no_hit_value,
+            range_noise_sigma_m=self.range_noise_sigma_m,
+            intensity_noise_sigma=self.intensity_noise_sigma,
+            dropout_prob=self.dropout_prob,
+            rain_rate_mm_h=self.rain_rate_mm_h,
+            fog_density=self.fog_density,
+            channel_offsets_m=list(self._channel_offsets),
+        )
 
     # ------------------------------------------------------------------
     # BaseSensor interface

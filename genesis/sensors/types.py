@@ -16,7 +16,8 @@ any field) and ``total=True`` (the default) for *observation* dicts
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from enum import IntEnum
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import numpy as np
 import numpy.typing as npt
@@ -40,10 +41,81 @@ UInt16Array = npt.NDArray[np.uint16]
 Int32Array = npt.NDArray[np.int32]
 #: Re-export numpy's ArrayLike for convenience.
 ArrayLike = npt.ArrayLike
-#: Valid polarities for a DVS event.
-Polarity = Literal[-1, 1]
 #: A jammer zone is a (centre_xyz, radius_m) pair.
 JammerZone = tuple[ArrayLike, float]
+
+# ---------------------------------------------------------------------------
+# Polarity
+# ---------------------------------------------------------------------------
+
+
+class Polarity(IntEnum):
+    """
+    Event polarity for a Dynamic Vision Sensor (DVS).
+
+    ``POSITIVE`` (+1) indicates a log-intensity increase, ``NEGATIVE``
+    (-1) indicates a decrease.  The ``IntEnum`` base ensures arithmetic
+    with plain integers still works (``Polarity.POSITIVE + 0 == 1``).
+    """
+
+    NEGATIVE = -1
+    POSITIVE = 1
+
+
+# ---------------------------------------------------------------------------
+# Shared sensor input state
+# ---------------------------------------------------------------------------
+
+
+class SensorState(TypedDict, total=False):
+    """
+    Combined ideal-state dict consumed by the sensor layer.
+
+    All fields are optional (``total=False``); individual sensors only
+    read the keys they need.  Building this dict from Genesis outputs::
+
+        state: SensorState = {
+            "rgb":   cam.render(rgb=True),
+            "depth": cam.render(depth=True),
+            "seg":   cam.render(segmentation=True),
+            "normal": cam.render(normal=True),
+            "gray":  gray_from_rgb(rgb),
+            "pose":  drone.get_pos_quat(),
+            "pos":   drone.get_pos().numpy(),
+            "vel":   drone.get_vel().numpy(),
+            "ang_vel": drone.get_ang_vel().numpy(),
+            "range_image": raycaster.read().numpy(),
+            "intensity_image": intensity.numpy(),
+            "temperature_map": {e.id: e.temp_c for e in scene.entities},
+            "obstruction": sky_obstruction_fraction,
+            "weather": {"rain_rate_mm_h": 5.0},
+        }
+    """
+
+    # Visual
+    rgb: Any  # np.ndarray (H, W, 3) uint8 or float32
+    depth: Any  # np.ndarray (H, W) float32, metres
+    seg: Any  # np.ndarray (H, W) int32, entity IDs
+    normal: Any  # np.ndarray (H, W, 3) float32
+    gray: Any  # np.ndarray (H, W) float32, [0, 1]
+
+    # Pose / velocity
+    pose: Any  # (pos, quat) pair
+    pos: Any  # np.ndarray (3,) metres ENU
+    vel: Any  # np.ndarray (3,) m/s ENU
+    ang_vel: Any  # np.ndarray (3,) rad/s
+
+    # LiDAR
+    range_image: Any  # np.ndarray (n_channels, h_resolution) float32, metres
+    intensity_image: Any  # np.ndarray (n_channels, h_resolution) float32, [0, 1]
+
+    # Thermal
+    temperature_map: dict[int, float]  # entity_id → temperature °C
+
+    # Environment
+    obstruction: float  # 0–1 sky-hemisphere obstruction fraction
+    weather: dict[str, float]  # e.g. {"rain_rate_mm_h": 5.0}
+
 
 # ---------------------------------------------------------------------------
 # Camera model
@@ -129,6 +201,8 @@ __all__ = [
     "Polarity",
     "UInt16Array",
     "UInt8Array",
+    # Input state
+    "SensorState",
     # Observation TypedDicts
     "CameraObservation",
     "EventCameraObservation",

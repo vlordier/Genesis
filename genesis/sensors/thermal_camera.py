@@ -21,12 +21,15 @@ image rendered by Genesis.
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 
 from .base import BaseSensor
 from .types import FloatArray, Int32Array, ThermalObservation, UInt16Array, UInt8Array
+
+if TYPE_CHECKING:
+    from .config import ThermalCameraConfig
 
 # Number of dimensions for a 3-D image array (H, W, C).
 _NDIM_3D: Final[int] = 3
@@ -136,6 +139,33 @@ class ThermalCameraModel(BaseSensor):
         )
 
         self._last_obs: dict[str, Any] = {}
+
+    # ------------------------------------------------------------------
+    # Config factory
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_config(cls, config: "ThermalCameraConfig") -> "ThermalCameraModel":
+        """Construct a :class:`ThermalCameraModel` from a :class:`~genesis.sensors.config.ThermalCameraConfig`."""
+        return cls(**config.model_dump())
+
+    def get_config(self) -> "ThermalCameraConfig":
+        """Return the current parameters as a :class:`~genesis.sensors.config.ThermalCameraConfig`."""
+        from .config import ThermalCameraConfig
+
+        return ThermalCameraConfig(
+            name=self.name,
+            update_rate_hz=self.update_rate_hz,
+            resolution=self.resolution,
+            temp_ambient_c=self.temp_ambient_c,
+            temp_sky_c=self.temp_sky_c,
+            psf_sigma=self.psf_sigma,
+            nuc_sigma=self.nuc_sigma,
+            noise_sigma=self.noise_sigma,
+            bit_depth=self.bit_depth,
+            fog_density=self.fog_density,
+            temp_range_c=self.temp_range_c,
+        )
 
     # ------------------------------------------------------------------
     # BaseSensor interface

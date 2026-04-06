@@ -18,12 +18,15 @@ the model remains backend-agnostic and can run without a GPU.
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 
 from .base import BaseSensor
 from .types import CameraObservation, FloatArray, UInt8Array
+
+if TYPE_CHECKING:
+    from .config import CameraConfig
 
 # Sensor-level constants
 _UINT8_MAX: Final[int] = 255
@@ -162,6 +165,33 @@ class CameraModel(BaseSensor):
 
         self._last_obs: dict[str, Any] = {}
         self._prev_frame: FloatArray | None = None  # for rolling-shutter / blur
+
+    # ------------------------------------------------------------------
+    # Config factory
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_config(cls, config: "CameraConfig") -> "CameraModel":
+        """Construct a :class:`CameraModel` from a :class:`~genesis.sensors.config.CameraConfig`."""
+        return cls(**config.model_dump())
+
+    def get_config(self) -> "CameraConfig":
+        """Return the current parameters as a :class:`~genesis.sensors.config.CameraConfig`."""
+        from .config import CameraConfig
+
+        return CameraConfig(
+            name=self.name,
+            update_rate_hz=self.update_rate_hz,
+            resolution=self.resolution,
+            distortion_coeffs=(tuple(self.distortion_coeffs.tolist()) if self.distortion_coeffs is not None else None),
+            rolling_shutter_fraction=self.rolling_shutter_fraction,
+            motion_blur_kernel=self.motion_blur_kernel,
+            base_iso=self.base_iso,
+            iso=self.iso,
+            read_noise_sigma=self.read_noise_sigma,
+            jpeg_quality=self.jpeg_quality,
+            full_well_electrons=self.full_well_electrons,
+        )
 
     # ------------------------------------------------------------------
     # BaseSensor interface

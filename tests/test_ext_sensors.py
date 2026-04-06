@@ -7,8 +7,11 @@ so they work in headless CI environments without EGL/OpenGL.
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from genesis.sensors import (
     BaseSensor,
@@ -18,11 +21,21 @@ from genesis.sensors import (
     GnssFixQuality,
     GNSSModel,
     LidarModel,
+    Polarity,
     RadioLinkModel,
     ScheduledPacket,
     SensorScheduler,
     SensorSuite,
     ThermalCameraModel,
+)
+from genesis.sensors.config import (
+    CameraConfig,
+    EventCameraConfig,
+    GNSSConfig,
+    LidarConfig,
+    RadioConfig,
+    SensorSuiteConfig,
+    ThermalCameraConfig,
 )
 
 # Number of colour channels in an RGB image
@@ -529,3 +542,248 @@ class TestSensorSuite:
         suite = SensorSuite.default()
         r = repr(suite)
         assert "SensorSuite" in r
+
+
+# ---------------------------------------------------------------------------
+# Polarity IntEnum
+# ---------------------------------------------------------------------------
+
+
+class TestPolarity:
+    def test_values(self) -> None:
+        assert int(Polarity.POSITIVE) == 1
+        assert int(Polarity.NEGATIVE) == -1
+
+    def test_int_comparison(self) -> None:
+        """IntEnum must compare equal to plain int counterparts."""
+        assert Polarity.POSITIVE == 1
+        assert Polarity.NEGATIVE == -1
+
+    def test_arithmetic(self) -> None:
+        assert Polarity.POSITIVE + 0 == 1
+        assert Polarity.NEGATIVE + 0 == -1
+
+
+# ---------------------------------------------------------------------------
+# Frozen dataclasses
+# ---------------------------------------------------------------------------
+
+
+class TestFrozenDataclasses:
+    def test_event_is_frozen(self) -> None:
+        e = Event(x=10, y=20, timestamp=0.5, polarity=Polarity.POSITIVE)
+        with pytest.raises((dataclasses.FrozenInstanceError, TypeError)):
+            e.x = 99  # type: ignore[misc]
+
+    def test_event_polarity_is_polarity_enum(self) -> None:
+        e = Event(x=0, y=0, timestamp=0.0, polarity=Polarity.NEGATIVE)
+        assert e.polarity == Polarity.NEGATIVE
+        assert int(e.polarity) == -1
+
+    def test_lidar_point_is_frozen(self) -> None:
+        from genesis.sensors import LidarPoint
+
+        pt = LidarPoint(x=1.0, y=2.0, z=3.0, intensity=0.5, channel=0, azimuth_deg=45.0, range_m=10.0)
+        with pytest.raises((dataclasses.FrozenInstanceError, TypeError)):
+            pt.x = 99.0  # type: ignore[misc]
+
+    def test_scheduled_packet_is_frozen(self) -> None:
+        pkt = ScheduledPacket(
+            payload="test",
+            src_pos=np.zeros(3),
+            dst_pos=np.ones(3),
+            send_time=0.0,
+            delivery_time=1.0,
+        )
+        with pytest.raises((dataclasses.FrozenInstanceError, TypeError)):
+            pkt.payload = "changed"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Pydantic v2 config models
+# ---------------------------------------------------------------------------
+
+
+class TestCameraConfig:
+    def test_default_construction(self) -> None:
+        cfg = CameraConfig()
+        assert cfg.update_rate_hz == 30.0
+        assert cfg.resolution == (640, 480)
+
+    def test_invalid_rate(self) -> None:
+        with pytest.raises(ValidationError):
+            CameraConfig(update_rate_hz=-1.0)
+
+    def test_invalid_resolution(self) -> None:
+        with pytest.raises(ValidationError):
+            CameraConfig(resolution=(0, 480))
+
+    def test_rolling_shutter_clipped(self) -> None:
+        with pytest.raises(ValidationError):
+            CameraConfig(rolling_shutter_fraction=1.5)
+
+    def test_json_round_trip(self) -> None:
+        cfg = CameraConfig(iso=400, jpeg_quality=70)
+        json_str = cfg.model_dump_json()
+        cfg2 = CameraConfig.model_validate_json(json_str)
+        assert cfg2.iso == 400
+        assert cfg2.jpeg_quality == 70
+
+    def test_from_config_produces_valid_model(self) -> None:
+        cfg = CameraConfig(resolution=(32, 32), update_rate_hz=10.0)
+        cam = CameraModel.from_config(cfg)
+        assert cam.resolution == (32, 32)
+        assert cam.update_rate_hz == 10.0
+
+    def test_get_config_round_trip(self) -> None:
+        cam = CameraModel(resolution=(16, 16), iso=200.0, update_rate_hz=15.0)
+        cfg = cam.get_config()
+        assert cfg.resolution == (16, 16)
+        assert cfg.iso == 200.0
+        assert cfg.update_rate_hz == 15.0
+
+
+class TestEventCameraConfig:
+    def test_default_construction(self) -> None:
+        cfg = EventCameraConfig()
+        assert cfg.threshold_pos == 0.2
+
+    def test_invalid_threshold(self) -> None:
+        with pytest.raises(ValidationError):
+            EventCameraConfig(threshold_pos=-0.1)
+
+    def test_from_config(self) -> None:
+        cfg = EventCameraConfig(update_rate_hz=500.0, threshold_pos=0.3)
+        sensor = EventCameraModel.from_config(cfg)
+        assert sensor.threshold_pos == 0.3
+        assert sensor.update_rate_hz == 500.0
+
+    def test_get_config_round_trip(self) -> None:
+        sensor = EventCameraModel(threshold_variation=0.1)
+        cfg = sensor.get_config()
+        assert cfg.threshold_variation == 0.1
+
+
+class TestThermalCameraConfig:
+    def test_temp_range_validation(self) -> None:
+        with pytest.raises(ValidationError):
+            ThermalCameraConfig(temp_range_c=(100.0, -20.0))  # min >= max
+
+    def test_from_config(self) -> None:
+        cfg = ThermalCameraConfig(resolution=(64, 64), bit_depth=8)
+        sensor = ThermalCameraModel.from_config(cfg)
+        assert sensor.bit_depth == 8
+
+    def test_get_config_round_trip(self) -> None:
+        sensor = ThermalCameraModel(noise_sigma=0.1, fog_density=0.02)
+        cfg = sensor.get_config()
+        assert cfg.noise_sigma == 0.1
+        assert cfg.fog_density == 0.02
+
+
+class TestLidarConfig:
+    def test_v_fov_validation(self) -> None:
+        with pytest.raises(ValidationError):
+            LidarConfig(v_fov_deg=(30.0, -15.0))  # min >= max
+
+    def test_from_config(self) -> None:
+        cfg = LidarConfig(n_channels=32, max_range_m=50.0)
+        sensor = LidarModel.from_config(cfg)
+        assert sensor.n_channels == 32
+        assert sensor.max_range_m == 50.0
+
+    def test_get_config_round_trip(self) -> None:
+        sensor = LidarModel(rain_rate_mm_h=5.0, dropout_prob=0.01)
+        cfg = sensor.get_config()
+        assert cfg.rain_rate_mm_h == 5.0
+        assert cfg.dropout_prob == 0.01
+
+
+class TestGNSSConfig:
+    def test_default_construction(self) -> None:
+        cfg = GNSSConfig()
+        assert cfg.noise_m == 1.5
+
+    def test_from_config(self) -> None:
+        cfg = GNSSConfig(noise_m=0.5, update_rate_hz=1.0)
+        sensor = GNSSModel.from_config(cfg)
+        assert sensor.noise_m == 0.5
+
+    def test_get_config_round_trip(self) -> None:
+        sensor = GNSSModel(noise_m=2.0, multipath_sigma_m=0.5)
+        cfg = sensor.get_config()
+        assert cfg.noise_m == 2.0
+        assert cfg.multipath_sigma_m == 0.5
+
+
+class TestRadioConfig:
+    def test_from_config(self) -> None:
+        cfg = RadioConfig(tx_power_dbm=30.0, los_required=True)
+        sensor = RadioLinkModel.from_config(cfg)
+        assert sensor.tx_power_dbm == 30.0
+        assert sensor.los_required is True
+
+    def test_get_config_round_trip(self) -> None:
+        sensor = RadioLinkModel(shadowing_sigma_db=6.0, frequency_ghz=5.8)
+        cfg = sensor.get_config()
+        assert cfg.shadowing_sigma_db == 6.0
+        assert cfg.frequency_ghz == 5.8
+
+
+class TestSensorSuiteConfig:
+    def test_default_has_rgb_and_gnss(self) -> None:
+        cfg = SensorSuiteConfig()
+        assert cfg.rgb is not None
+        assert cfg.gnss is not None
+
+    def test_all_disabled(self) -> None:
+        cfg = SensorSuiteConfig.all_disabled()
+        assert cfg.rgb is None
+        assert cfg.gnss is None
+        assert cfg.lidar is None
+
+    def test_minimal(self) -> None:
+        cfg = SensorSuiteConfig.minimal()
+        assert cfg.gnss is not None
+        assert cfg.rgb is None
+
+    def test_full(self) -> None:
+        cfg = SensorSuiteConfig.full()
+        assert cfg.event is not None
+        assert cfg.thermal is not None
+
+    def test_from_config_builds_suite(self) -> None:
+        cfg = SensorSuiteConfig(
+            rgb=CameraConfig(resolution=(32, 32)),
+            gnss=GNSSConfig(noise_m=0.5),
+            event=None,
+            thermal=None,
+            lidar=None,
+            radio=None,
+        )
+        suite = SensorSuite.from_config(cfg)
+        assert "rgb" in suite.sensor_names()
+        assert "gnss" in suite.sensor_names()
+        assert "lidar" not in suite.sensor_names()
+
+    def test_json_round_trip(self) -> None:
+        cfg = SensorSuiteConfig.full()
+        json_str = cfg.model_dump_json()
+        cfg2 = SensorSuiteConfig.model_validate_json(json_str)
+        assert cfg2.rgb is not None
+        assert cfg2.event is not None
+
+    def test_from_config_suite_step(self) -> None:
+        cfg = SensorSuiteConfig(
+            rgb=CameraConfig(resolution=(16, 16), update_rate_hz=10.0),
+            gnss=GNSSConfig(update_rate_hz=10.0),
+            event=None,
+            thermal=None,
+            lidar=None,
+            radio=None,
+        )
+        suite = SensorSuite.from_config(cfg)
+        suite.reset()
+        obs = suite.step(0.0, {"rgb": _make_rgb(16, 16), "pos": np.zeros(3), "vel": np.zeros(3)})
+        assert "rgb" in obs
+        assert "gnss" in obs

@@ -60,6 +60,7 @@ from .thermal_camera import ThermalCameraModel
 
 if TYPE_CHECKING:
     from .base import BaseSensor
+    from .config import SensorSuiteConfig
 
 
 class SensorSuite:
@@ -154,6 +155,32 @@ class SensorSuite:
             lidar=LidarModel(update_rate_hz=lidar_rate_hz) if lidar_rate_hz > 0 else None,
             gnss=GNSSModel(update_rate_hz=gnss_rate_hz) if gnss_rate_hz > 0 else None,
             radio=RadioLinkModel(update_rate_hz=radio_rate_hz) if radio_rate_hz > 0 else None,
+        )
+
+    @classmethod
+    def from_config(cls, config: "SensorSuiteConfig") -> SensorSuite:
+        """
+        Create a :class:`SensorSuite` from a :class:`~genesis.sensors.config.SensorSuiteConfig`.
+
+        Example
+        -------
+        ::
+
+            from genesis.sensors.config import SensorSuiteConfig, CameraConfig, GNSSConfig
+            cfg = SensorSuiteConfig(
+                rgb=CameraConfig(iso=400),
+                gnss=GNSSConfig(noise_m=0.3),
+                lidar=None,
+            )
+            suite = SensorSuite.from_config(cfg)
+        """
+        return cls(
+            rgb_camera=CameraModel.from_config(config.rgb) if config.rgb is not None else None,
+            event_camera=(EventCameraModel.from_config(config.event) if config.event is not None else None),
+            thermal_camera=(ThermalCameraModel.from_config(config.thermal) if config.thermal is not None else None),
+            lidar=LidarModel.from_config(config.lidar) if config.lidar is not None else None,
+            gnss=GNSSModel.from_config(config.gnss) if config.gnss is not None else None,
+            radio=RadioLinkModel.from_config(config.radio) if config.radio is not None else None,
         )
 
     # ------------------------------------------------------------------

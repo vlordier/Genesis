@@ -34,12 +34,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 
 from .base import BaseSensor
 from .types import ArrayLike, Float64Array, RadioObservation
+
+if TYPE_CHECKING:
+    from .config import RadioConfig
 
 # Speed of light (m/s)
 _SPEED_OF_LIGHT_M_S: Final[float] = 3e8
@@ -55,9 +58,14 @@ _PER_SIGMOID_STEEPNESS: Final[float] = 5.0
 _MIN_DISTANCE_M: Final[float] = 0.1
 
 
-@dataclass
+@dataclass(frozen=True)
 class ScheduledPacket:
-    """A packet scheduled for future delivery."""
+    """
+    A packet scheduled for future delivery.
+
+    Frozen to prevent mutation after enqueuing, which could corrupt
+    timing guarantees.
+    """
 
     payload: Any
     src_pos: Float64Array
@@ -153,6 +161,38 @@ class RadioLinkModel(BaseSensor):
 
         self._queue: list[ScheduledPacket] = []
         self._last_obs: dict[str, Any] = {"delivered": []}
+
+    # ------------------------------------------------------------------
+    # Config factory
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_config(cls, config: "RadioConfig") -> "RadioLinkModel":
+        """Construct a :class:`RadioLinkModel` from a :class:`~genesis.sensors.config.RadioConfig`."""
+        # los_required is keyword-only in __init__; extract it separately
+        data = config.model_dump()
+        los_required = data.pop("los_required", False)
+        return cls(**data, los_required=los_required)
+
+    def get_config(self) -> "RadioConfig":
+        """Return the current parameters as a :class:`~genesis.sensors.config.RadioConfig`."""
+        from .config import RadioConfig
+
+        return RadioConfig(
+            name=self.name,
+            update_rate_hz=self.update_rate_hz,
+            tx_power_dbm=self.tx_power_dbm,
+            frequency_ghz=self.frequency_ghz,
+            noise_figure_db=self.noise_figure_db,
+            path_loss_exponent=self.path_loss_exponent,
+            shadowing_sigma_db=self.shadowing_sigma_db,
+            min_snr_db=self.min_snr_db,
+            snr_transition_db=self.snr_transition_db,
+            base_latency_s=self.base_latency_s,
+            jitter_sigma_s=self.jitter_sigma_s,
+            nlos_excess_loss_db=self.nlos_excess_loss_db,
+            los_required=self.los_required,
+        )
 
     # ------------------------------------------------------------------
     # Public properties

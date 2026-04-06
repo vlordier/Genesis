@@ -23,12 +23,15 @@ Gallego et al., "Event-based Vision: A Survey", IEEE TPAMI 2022.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 
 from .base import BaseSensor
 from .types import EventCameraObservation, FloatArray, Polarity
+
+if TYPE_CHECKING:
+    from .config import EventCameraConfig
 
 # Minimum intensity value used when computing log-intensity to avoid log(0).
 _LOG_CLIP_MIN: Final[float] = 1e-4
@@ -38,14 +41,19 @@ _MIN_PIXEL_THRESHOLD: Final[float] = 0.01
 _NDIM_3D: Final[int] = 3
 
 
-@dataclass
+@dataclass(frozen=True)
 class Event:
-    """A single DVS event."""
+    """
+    A single DVS event.
+
+    Frozen to allow use in sets and as dict keys, and to prevent
+    accidental mutation of recorded event streams.
+    """
 
     x: int
     y: int
     timestamp: float
-    polarity: Polarity  # +1 or -1
+    polarity: Polarity  # Polarity.POSITIVE (+1) or Polarity.NEGATIVE (-1)
 
 
 def pack_events(
@@ -56,9 +64,9 @@ def pack_events(
     """Convert coordinate arrays to a list of :class:`Event` objects."""
     events: list[Event] = []
     for y, x in pos_yx:
-        events.append(Event(x=int(x), y=int(y), timestamp=timestamp, polarity=1))
+        events.append(Event(x=int(x), y=int(y), timestamp=timestamp, polarity=Polarity.POSITIVE))
     for y, x in neg_yx:
-        events.append(Event(x=int(x), y=int(y), timestamp=timestamp, polarity=-1))
+        events.append(Event(x=int(x), y=int(y), timestamp=timestamp, polarity=Polarity.NEGATIVE))
     return events
 
 
@@ -117,6 +125,29 @@ class EventCameraModel(BaseSensor):
         self._th_pos_map: FloatArray | None = None  # per-pixel positive threshold
         self._th_neg_map: FloatArray | None = None  # per-pixel negative threshold
         self._events: list[Event] = []
+
+    # ------------------------------------------------------------------
+    # Config factory
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_config(cls, config: "EventCameraConfig") -> "EventCameraModel":
+        """Construct an :class:`EventCameraModel` from an :class:`~genesis.sensors.config.EventCameraConfig`."""
+        return cls(**config.model_dump())
+
+    def get_config(self) -> "EventCameraConfig":
+        """Return the current parameters as an :class:`~genesis.sensors.config.EventCameraConfig`."""
+        from .config import EventCameraConfig
+
+        return EventCameraConfig(
+            name=self.name,
+            update_rate_hz=self.update_rate_hz,
+            threshold_pos=self.threshold_pos,
+            threshold_neg=self.threshold_neg,
+            refractory_period_s=self.refractory_period_s,
+            threshold_variation=self.threshold_variation,
+            background_activity_rate_hz=self.background_activity_rate_hz,
+        )
 
     # ------------------------------------------------------------------
     # Public properties
@@ -277,9 +308,7 @@ class EventCameraModel(BaseSensor):
         xs = self._rng.integers(0, w, n_noise)
         ys = self._rng.integers(0, h, n_noise)
         pols = self._rng.choice([-1, 1], n_noise)
-        return [
-            Event(x=int(x), y=int(y), timestamp=sim_time, polarity=p) for x, y, p in zip(xs, ys, pols, strict=False)
-        ]
+        return [Event(x=int(x), y=int(y), timestamp=sim_time, polarity=p) for x, y, p in zip(xs, ys, pols, strict=True)]
 
     @staticmethod
     def _rgb_to_gray(rgb: np.ndarray) -> FloatArray:
