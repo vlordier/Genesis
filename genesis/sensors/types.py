@@ -17,13 +17,10 @@ any field) and ``total=True`` (the default) for *observation* dicts
 from __future__ import annotations
 
 from enum import IntEnum
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import Any, TypedDict
 
 import numpy as np
 import numpy.typing as npt
-
-if TYPE_CHECKING:
-    pass  # future imports only needed at check-time go here
 
 # ---------------------------------------------------------------------------
 # Generic NDArray aliases
