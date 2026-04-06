@@ -125,6 +125,7 @@ class EventCameraModel(BaseSensor):
         self._th_pos_map: FloatArray | None = None  # per-pixel positive threshold
         self._th_neg_map: FloatArray | None = None  # per-pixel negative threshold
         self._events: list[Event] = []
+        self._last_obs: dict[str, Any] = {"events": []}
 
     # ------------------------------------------------------------------
     # Config factory
@@ -168,6 +169,7 @@ class EventCameraModel(BaseSensor):
         self._th_pos_map = None
         self._th_neg_map = None
         self._events = []
+        self._last_obs: dict[str, Any] = {"events": []}
         self._last_update_time = -1.0
 
     def step(self, sim_time: float, state: dict[str, Any]) -> EventCameraObservation | dict[str, Any]:
@@ -184,15 +186,17 @@ class EventCameraModel(BaseSensor):
         gray = self._load_gray(state)
         if gray is None:
             self._events = []
-            return {"events": self._events}
+            self._last_obs = {"events": self._events}
+            return self._last_obs
 
         h, w = gray.shape
         if self._prev_log is None:
             # First frame: initialise log-intensity buffer, no events yet.
             self._prev_log = np.log(np.clip(gray, _LOG_CLIP_MIN, None))
             self._events = []
+            self._last_obs = {"events": self._events}
             self._mark_updated(sim_time)
-            return {"events": self._events}
+            return self._last_obs
 
         self._ensure_threshold_maps(h, w)
         self._ensure_refractory_map(h, w)
@@ -203,11 +207,12 @@ class EventCameraModel(BaseSensor):
 
         self._prev_log = log_i
         self._events = events
+        self._last_obs = {"events": events}
         self._mark_updated(sim_time)
-        return {"events": events}
+        return self._last_obs
 
     def get_observation(self) -> dict[str, Any]:
-        return {"events": self._events}
+        return self._last_obs
 
     # ------------------------------------------------------------------
     # Private helpers -- frame loading

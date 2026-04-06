@@ -111,7 +111,11 @@ class SensorScheduler:
 
     def get_sensor(self, name: str) -> BaseSensor:
         """Return the sensor registered under *name*."""
-        return self._sensors[name]
+        try:
+            return self._sensors[name]
+        except KeyError:
+            registered = list(self._sensors)
+            raise KeyError(f"No sensor named {name!r}. Registered sensors: {registered}") from None
 
     def __repr__(self) -> str:
         entries = ", ".join(f"{name}@{s.update_rate_hz}Hz" for name, s in self._sensors.items())

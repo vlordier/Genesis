@@ -169,6 +169,18 @@ class TestCameraModel:
         cam.step(0.0, {"rgb": _make_rgb(32, 32)})
         assert cam.get_observation() is not None
 
+    def test_fixed_pattern_noise_resolution_mismatch_no_crash(self) -> None:
+        """Stepping with an image larger than configured resolution must not raise IndexError."""
+        cam = CameraModel(resolution=(32, 32), update_rate_hz=30.0, dead_pixel_fraction=0.01)
+        # Provide an image that is smaller than configured — must succeed
+        small_rgb = _make_rgb(16, 16)
+        obs_small = cam.step(0.0, {"rgb": small_rgb})
+        assert obs_small["rgb"].shape == (16, 16, _RGB_CHANNELS)
+        # Provide an image that is larger than configured — must succeed (was IndexError)
+        large_rgb = _make_rgb(64, 64)
+        obs_large = cam.step(0.0, {"rgb": large_rgb})
+        assert obs_large["rgb"].shape == (64, 64, _RGB_CHANNELS)
+
 
 # ---------------------------------------------------------------------------
 # EventCameraModel
@@ -238,6 +250,22 @@ class TestEventCameraModel:
         ecam.step(0.0, {"gray": _make_gray()})
         assert ecam.is_initialized
 
+    def test_get_observation_returns_last_obs(self) -> None:
+        """get_observation() must return the exact same dict as the last step() call."""
+        ecam = EventCameraModel(threshold_pos=0.05, threshold_neg=0.05)
+        gray1 = np.zeros((16, 16), dtype=np.float32) + 0.3
+        gray2 = np.zeros((16, 16), dtype=np.float32) + 0.9
+        ecam.step(0.0, {"gray": gray1})
+        obs = ecam.step(0.001, {"gray": gray2})
+        assert ecam.get_observation() is obs, "get_observation() must return the cached _last_obs dict"
+
+    def test_get_observation_before_step(self) -> None:
+        """get_observation() before any step() should return empty events list, not raise."""
+        ecam = EventCameraModel()
+        obs = ecam.get_observation()
+        assert "events" in obs
+        assert obs["events"] == []
+
 
 # ---------------------------------------------------------------------------
 # ThermalCameraModel
@@ -287,6 +315,15 @@ class TestThermalCameraModel:
         tcam.step(0.0, {"seg": _make_seg(), "temperature_map": {}})
         tcam.reset()
         assert tcam.is_due(0.0)
+
+    def test_gaussian_blur_fallback_applies_blur(self) -> None:
+        """Box-filter fallback must actually blur the image, not return it unchanged."""
+        img = np.zeros((20, 20), dtype=np.float32)
+        img[10, 10] = 1.0  # single hot pixel
+        blurred = ThermalCameraModel._gaussian_blur(img, sigma=2.0)
+        # Blurred image must spread energy to neighbours
+        assert blurred[10, 10] < 1.0, "Hot pixel should be spread by blur"
+        assert blurred[10, 11] > 0.0, "Adjacent pixel should receive some energy"
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +407,22 @@ class TestGNSSModel:
         gnss.step(0.0, {"pos": np.zeros(3), "vel": np.zeros(3)})
         gnss.reset()
         assert np.allclose(gnss.bias, 0.0)
+
+    def test_polar_origin_no_crash(self) -> None:
+        """GNSSModel must not produce inf/nan when origin is at the geographic pole."""
+        gnss = GNSSModel(origin_llh=(90.0, 0.0, 0.0), update_rate_hz=10.0, seed=0)
+        obs = gnss.step(0.0, {"pos": np.array([100.0, 200.0, 5.0]), "vel": np.zeros(3)})
+        assert np.all(np.isfinite(obs["pos_llh"])), "pos_llh must be finite near the pole"
+        assert np.isfinite(obs["pos_llh"][1]), "longitude must be finite near the pole"
+
+    def test_jammer_does_not_expose_true_position(self) -> None:
+        """When inside a jammer zone the output pos must NOT be the true position."""
+        centre = np.array([0.0, 0.0, 0.0])
+        gnss = GNSSModel(jammer_zones=[(centre, 1000.0)], update_rate_hz=10.0, seed=0)
+        true_pos = np.array([1.0, 2.0, 3.0])
+        obs = gnss.step(0.0, {"pos": true_pos, "vel": np.zeros(3)})
+        assert obs["fix_quality"] == GnssFixQuality.NO_FIX
+        assert not np.allclose(obs["pos"], true_pos), "Jammer output must not expose the ground-truth position"
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +541,13 @@ class TestSensorScheduler:
         s = SensorScheduler()
         s.add(_DummySensor(name="d", update_rate_hz=5.0))
         assert "5.0Hz" in repr(s)
+
+    def test_get_sensor_unknown_name_helpful_error(self) -> None:
+        """get_sensor() must raise KeyError with the sensor name and registered list."""
+        s = SensorScheduler()
+        s.add(_DummySensor(name="known", update_rate_hz=1.0), name="known")
+        with pytest.raises(KeyError, match="unknown"):
+            s.get_sensor("unknown")
 
 
 # ---------------------------------------------------------------------------

@@ -45,12 +45,10 @@ _UINT8_MAX_BIT_DEPTH: Final[int] = 8
 # ---------------------------------------------------------------------------
 try:
     from scipy.ndimage import gaussian_filter as _scipy_gaussian_filter
-    from scipy.ndimage import convolve as _scipy_convolve
 
     _SCIPY_AVAILABLE: Final[bool] = True
 except ImportError:
     _scipy_gaussian_filter = None  # type: ignore[assignment]
-    _scipy_convolve = None  # type: ignore[assignment]
     _SCIPY_AVAILABLE: Final[bool] = False  # type: ignore[misc]
 
 
@@ -254,12 +252,14 @@ class ThermalCameraModel(BaseSensor):
         """
         if _SCIPY_AVAILABLE and _scipy_gaussian_filter is not None:
             return _scipy_gaussian_filter(img, sigma=sigma).astype(np.float32)
-        # Box-filter approximation (not a true Gaussian).
+        # Box-filter fallback via separable 1-D convolutions (numpy only).
+        # Previous code had a dead `if _SCIPY_AVAILABLE` guard here that
+        # always evaluated False, causing the unblurred image to be returned.
         k = max(1, int(sigma * 2 + 1))
-        kernel = np.ones((k, k), dtype=np.float32) / (k * k)
-        if _SCIPY_AVAILABLE and _scipy_convolve is not None:
-            return _scipy_convolve(img, kernel).astype(np.float32)
-        return img
+        box = np.ones(k, dtype=np.float32) / k
+        out = np.apply_along_axis(lambda r: np.convolve(r, box, mode="same"), axis=1, arr=img)
+        out = np.apply_along_axis(lambda r: np.convolve(r, box, mode="same"), axis=0, arr=out)
+        return out.astype(np.float32)
 
     def _quantise(self, temp_img: FloatArray) -> UInt8Array | UInt16Array:
         """Map temperature to raw sensor counts using a linear scale.

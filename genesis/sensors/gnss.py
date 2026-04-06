@@ -39,6 +39,8 @@ if TYPE_CHECKING:
 
 # Physical constants
 _EARTH_RADIUS_M: Final[float] = 6_378_137.0
+# Minimum metres-per-degree-longitude to guard against division by zero at the poles.
+_MIN_M_PER_DEG_LON: Final[float] = 1.0
 # Fallback HDOP reported when there is no fix or inside a jammer zone.
 _HDOP_NO_FIX: Final[float] = 99.9
 # Nominal satellites visible at zero obstruction.
@@ -123,8 +125,13 @@ class GNSSModel(BaseSensor):
         self._rng = np.random.default_rng(seed=seed)
 
         # Earth radius and degrees-per-metre factors (flat-earth ENU approximation).
+        # Clamp m_per_deg_lon with a minimum value to prevent division by zero
+        # when the simulation origin is at or very near the geographic poles.
         self._m_per_deg_lat = math.pi * _EARTH_RADIUS_M / 180.0
-        self._m_per_deg_lon = self._m_per_deg_lat * math.cos(math.radians(self.origin_llh[0]))
+        self._m_per_deg_lon = max(
+            self._m_per_deg_lat * math.cos(math.radians(self.origin_llh[0])),
+            _MIN_M_PER_DEG_LON,
+        )
 
         # ------------------------------------------------------------------
         # Pre-computed Gauss-Markov coefficients (constant for fixed update rate)
@@ -206,9 +213,21 @@ class GNSSModel(BaseSensor):
         # Check jammer zones using pre-converted centre arrays
         for centre_arr, radius in zip(self._jammer_centres, self._jammer_radii):
             if float(np.linalg.norm(true_pos - centre_arr)) <= radius:
+                # Return stale last-known position/velocity when jammed so that
+                # ground truth is never exposed through the sensor output.
+                stale_pos = (
+                    np.asarray(self._last_obs["pos"], dtype=np.float64)
+                    if self._last_obs and "pos" in self._last_obs
+                    else np.zeros(3, dtype=np.float64)
+                )
+                stale_vel = (
+                    np.asarray(self._last_obs["vel"], dtype=np.float64)
+                    if self._last_obs and "vel" in self._last_obs
+                    else np.zeros(3, dtype=np.float64)
+                )
                 result: GnssObservation = {
-                    "pos": true_pos.copy(),
-                    "vel": true_vel.copy(),
+                    "pos": stale_pos,
+                    "vel": stale_vel,
                     "pos_llh": np.array([self.origin_llh[0], self.origin_llh[1], self.origin_llh[2]]),
                     "fix_quality": GnssFixQuality.NO_FIX,
                     "n_satellites": 0,
