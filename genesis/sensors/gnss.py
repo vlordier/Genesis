@@ -285,3 +285,6 @@ class GNSSModel(BaseSensor):
 
     def get_observation(self) -> dict[str, Any]:
         return self._last_obs
+
+
+__all__ = ["GNSSModel", "GnssFixQuality"]
