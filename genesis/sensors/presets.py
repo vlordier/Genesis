@@ -300,6 +300,14 @@ NOVATEL_OEM7 = GNSSConfig(
 # Registry and helpers
 # ---------------------------------------------------------------------------
 
+# Category → list of preset names; used by list_presets(kind=...).
+_PRESET_CATEGORIES: dict[str, list[str]] = {
+    "camera": ["GOPRO_HERO11_4K30", "INTEL_D435_RGB", "RASPBERRY_PI_V2", "ZED2_LEFT"],
+    "lidar": ["LIVOX_AVIA", "OUSTER_OS1_64", "VELODYNE_HDL64E", "VELODYNE_VLP16"],
+    "imu": ["PIXHAWK_ICM20689", "VECTORNAV_VN100", "XSENS_MTI_3"],
+    "gnss": ["NOVATEL_OEM7", "UBLOX_F9P_RTK", "UBLOX_M8N"],
+}
+
 _REGISTRY: dict[str, PresetConfig] = {
     # Cameras
     "RASPBERRY_PI_V2": RASPBERRY_PI_V2,
