@@ -320,7 +320,7 @@ class ContactForceSensor(
         pos = self._link.get_pos(env_idx).reshape((3,))
         quat = self._link.get_quat(env_idx).reshape((4,))
 
-        force = self.read(env_idx).reshape((3,))
+        force = self._manager.get_cloned_from_cache(self, is_ground_truth=False)[0, :3].reshape((3,))
         vec = tensor_to_array(transform_by_quat(force * self._options.debug_scale, quat))
 
         if self.debug_object is not None:
