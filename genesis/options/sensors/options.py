@@ -12,6 +12,7 @@ from genesis.typing import (
     NonNegativeFloat,
     NonNegativeInt,
     PositiveFloat,
+    PositiveInt,
     RotationMatrixType,
     UnitIntervalVec3Type,
     UnitIntervalVec4Type,
@@ -182,6 +183,9 @@ class ContactForce(RigidSensorOptionsMixin["ContactForceSensor"], NoisySensorOpt
         The minimum detectable absolute force per each axis. Values below this will be treated as 0. Default is 0.
     max_force : float | array-like[float, float, float], optional
         The maximum output absolute force per each axis. Values above this will be clipped. Default is infinity.
+    history_length : int, optional
+        The number of historical force readings to store and return. Default is 1 (current value only).
+        When > 1, the sensor returns a history buffer of shape (history_length, 3) per environment.
     debug_color : array-like[float, float, float, float], optional
         The rgba color of the debug arrow. Defaults to (1.0, 0.0, 1.0, 0.5).
     debug_scale : float, optional
@@ -192,6 +196,8 @@ class ContactForce(RigidSensorOptionsMixin["ContactForceSensor"], NoisySensorOpt
 
     min_force: LaxNonNegativeUnboundedVec3FType = 0.0
     max_force: LaxNonNegativeUnboundedVec3FType = np.inf
+
+    history_length: PositiveInt = 1
 
     debug_color: UnitIntervalVec4Type = (1.0, 0.0, 1.0, 0.5)
     debug_scale: PositiveFloat = 0.01

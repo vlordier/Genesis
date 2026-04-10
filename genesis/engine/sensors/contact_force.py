@@ -169,6 +169,7 @@ class ContactForceSensorMetadata(RigidSensorMetadataMixin, NoisySensorMetadataMi
 
     min_force: torch.Tensor = make_tensor_field((0, 3))
     max_force: torch.Tensor = make_tensor_field((0, 3))
+    history_length: int = 1
 
 
 class ContactForceSensor(
@@ -185,6 +186,38 @@ class ContactForceSensor(
 
         self.debug_object: "Mesh" | None = None
 
+    @gs.assert_built
+    def read(self, envs_idx=None) -> torch.Tensor:
+        """
+        Read the sensor data (with noise applied if applicable).
+        """
+        envs_idx = self._sanitize_envs_idx(envs_idx)
+        history_length = self._options.history_length
+
+        buffered_data = self._manager._buffered_data[gs.tc_float]
+        cache_slice = slice(self._cache_idx, self._cache_idx + self._cache_size // history_length)
+
+        if history_length == 1:
+            return self._get_formatted_data(self._manager.get_cloned_from_cache(self), envs_idx)
+
+        history_data = []
+        for i in range(history_length):
+            hist_idx = buffered_data.at(i, envs_idx, cache_slice)
+            hist_idx = hist_idx.permute(1, 0, 2) if hist_idx.ndim == 3 else hist_idx.reshape(1, -1, 3)
+            if self._manager._sim.n_envs == 0:
+                hist_idx = hist_idx[0]
+            history_data.append(hist_idx)
+
+        result = torch.stack(history_data, dim=0)
+        return result.squeeze(1) if self._manager._sim.n_envs == 0 else result
+
+    @gs.assert_built
+    def read_ground_truth(self, envs_idx=None) -> torch.Tensor:
+        """
+        Read the ground truth sensor data (without noise).
+        """
+        return self.read(envs_idx)
+
     def build(self):
         super().build()
 
@@ -197,9 +230,10 @@ class ContactForceSensor(
         self._shared_metadata.max_force = concat_with_tensor(
             self._shared_metadata.max_force, self._options.max_force, expand=(1, 3)
         )
+        self._shared_metadata.history_length = max(self._shared_metadata.history_length, self._options.history_length)
 
     def _get_return_format(self) -> tuple[int, ...]:
-        return (3,)
+        return (self._options.history_length, 3)
 
     @classmethod
     def _get_cache_dtype(cls) -> torch.dtype:
