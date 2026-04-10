@@ -4154,6 +4154,112 @@ class RigidEntity(KinematicEntity):
             mass += link.get_mass()
         return mass
 
+    @gs.assert_built
+    def get_height_at(self, x: float, y: float) -> float:
+        """
+        Get terrain height at world position (x, y).
+
+        Uses bilinear interpolation from the height field.
+
+        Parameters
+        ----------
+        x : float
+            World x position.
+        y : float
+            World y position.
+
+        Returns
+        -------
+        height : float
+            Interpolated height at (x, y).
+        """
+        if not hasattr(self, "terrain_hf"):
+            gs.raise_exception("This entity does not have a terrain height field.")
+
+        hf = self.terrain_hf
+        h_scale, v_scale = self.terrain_scale
+
+        x_idx = x / h_scale
+        y_idx = y / h_scale
+
+        x0 = int(np.floor(x_idx))
+        y0 = int(np.floor(y_idx))
+        x1 = x0 + 1
+        y1 = y0 + 1
+
+        if x0 < 0 or y0 < 0 or x1 >= hf.shape[1] or y1 >= hf.shape[0]:
+            if 0 <= x0 < hf.shape[1] and 0 <= y0 < hf.shape[0]:
+                return hf[y0, x0] * v_scale
+            return 0.0
+
+        tx = x_idx - x0
+        ty = y_idx - y0
+
+        h00 = hf[y0, x0]
+        h10 = hf[y0, x1]
+        h01 = hf[y1, x0]
+        h11 = hf[y1, x1]
+
+        h = (1 - tx) * (1 - ty) * h00 + tx * (1 - ty) * h10 + (1 - tx) * ty * h01 + tx * ty * h11
+        return h * v_scale
+
+    @gs.assert_built
+    def get_normal_at(self, x: float, y: float) -> np.ndarray:
+        """
+        Get terrain surface normal at world position (x, y).
+
+        Computes normal by taking cross product of tangent vectors
+        in x and y directions from the height field gradient.
+
+        Parameters
+        ----------
+        x : float
+            World x position.
+        y : float
+            World y position.
+
+        Returns
+        -------
+        normal : np.ndarray
+            Unit normal vector of shape (3,) at (x, y).
+        """
+        if not hasattr(self, "terrain_hf"):
+            gs.raise_exception("This entity does not have a terrain height field.")
+
+        hf = self.terrain_hf
+        h_scale, v_scale = self.terrain_scale
+
+        x_idx = x / h_scale
+        y_idx = y / h_scale
+
+        x0 = int(np.floor(x_idx))
+        y0 = int(np.floor(y_idx))
+        x1 = x0 + 1
+        y1 = y0 + 1
+
+        if x0 < 0 or y0 < 0 or x1 >= hf.shape[1] or y1 >= hf.shape[0]:
+            return np.array([0.0, 0.0, 1.0])
+
+        tx = x_idx - x0
+        ty = y_idx - y0
+
+        h00 = hf[y0, x0]
+        h10 = hf[y0, x1]
+        h01 = hf[y1, x0]
+        h11 = hf[y1, x1]
+
+        dz_dx = ((1 - ty) * (h10 - h00) + ty * (h11 - h01)) * v_scale / h_scale
+        dz_dy = ((1 - tx) * (h01 - h00) + tx * (h11 - h10)) * v_scale / h_scale
+
+        normal = np.array([-dz_dx, -dz_dy, 1.0])
+        normal_norm = np.linalg.norm(normal)
+        if normal_norm > 1e-8:
+            normal = normal / normal_norm
+        else:
+            normal = np.array([0.0, 0.0, 1.0])
+
+        return normal
+
     # ------------------------------------------------------------------------------------
     # ----------------------------------- properties -------------------------------------
     # ------------------------------------------------------------------------------------
