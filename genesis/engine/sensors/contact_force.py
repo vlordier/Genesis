@@ -142,11 +142,15 @@ class ContactSensor(Sensor[ContactSensorOptions, ContactSensorMetadata]):
         Draw debug sphere when the sensor detects contact.
 
         Only draws for first rendered environment.
+        
+        Note: Uses ground truth contact state (no delay/noise applied) to ensure
+        debug visualization matches the actual physics state, not delayed sensor readings.
         """
         env_idx = context.rendered_envs_idx[0] if self._manager._sim.n_envs > 0 else None
 
         pos = self._link.get_pos(env_idx).reshape((3,))
-        is_contact = self.read(env_idx)
+        # Use ground truth for debug visualization to avoid delay mismatch
+        is_contact = self.read_ground_truth(env_idx)
 
         if self.debug_object is not None:
             context.clear_debug_object(self.debug_object)
