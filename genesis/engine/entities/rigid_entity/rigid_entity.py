@@ -121,6 +121,53 @@ class KinematicEntity(Entity):
     def init_ckpt(self):
         pass
 
+    def process_input(self, in_backward=False):
+        """
+        Process input for kinematic entity (set qpos/velocity from user commands).
+
+        This method applies target commands (set_pos, set_quat, set_dofs_velocity, set_qpos)
+        that were queued via the corresponding setter methods.
+
+        Parameters
+        ----------
+        in_backward : bool, optional
+            Whether this is being called during backward pass. If True, retrieves
+            target from the buffer instead of current _tgt.
+        """
+        if in_backward:
+            # Use negative index because buffer length might not be full
+            index = self._sim.cur_step_local - self._sim._steps_local
+            self._tgt = self._tgt_buffer[index].copy()
+        else:
+            self._tgt_buffer.append(self._tgt.copy())
+
+        update_tgt_while_set = self._update_tgt_while_set
+        # Apply targets in the order of insertion
+        for key in self._tgt.keys():
+            data_kwargs = self._tgt[key]
+
+            # We do not need zero velocity here because if it was true, [set_dofs_velocity] from zero_velocity would
+            # be in [tgt]
+            if "zero_velocity" in data_kwargs:
+                data_kwargs["zero_velocity"] = False
+            # Do not update [tgt], as input information is finalized at this point
+            self._update_tgt_while_set = False
+
+            match key:
+                case "set_pos":
+                    self.set_pos(**data_kwargs)
+                case "set_quat":
+                    self.set_quat(**data_kwargs)
+                case "set_dofs_velocity":
+                    self.set_dofs_velocity(**data_kwargs)
+                case "set_qpos":
+                    self.set_qpos(**data_kwargs)
+                case _:
+                    gs.raise_exception(f"Invalid target key: {key} not in {self._tgt_keys}")
+
+        self._tgt = dict()
+        self._update_tgt_while_set = update_tgt_while_set
+
     def _load_morph(self, morph: Morph):
         """Load a single morph into the entity."""
         if isinstance(morph, gs.morphs.Mesh):

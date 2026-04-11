@@ -165,6 +165,19 @@ class Solver(RBC):
     def n_entities(self):
         return len(self._entities)
 
+    def substep(self, f):
+        """
+        Perform a single substep of simulation.
+        
+        Override this method in subclasses to implement time integration.
+        
+        Parameters
+        ----------
+        f : int
+            Current substep index.
+        """
+        pass
+
     def _repr_brief(self):
         repr_str = f"{self.__repr_name__()}: {self._uid}, n_entities: {self.n_entities}"
         return repr_str

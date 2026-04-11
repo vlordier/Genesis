@@ -34,6 +34,7 @@ from .rigid.abd.forward_kinematics import (
     kernel_masked_forward_kinematics,
     kernel_masked_forward_velocity,
     kernel_update_vgeoms,
+    kernel_integrate_dofs_velocity,
 )
 from .rigid.abd.accessor import (
     kernel_get_kinematic_state,
@@ -439,6 +440,20 @@ class KinematicSolver(Solver):
     # ------------------------------------------------------------------------------------
     # -------------------------------- simulation no-ops ----------------------------------
     # ------------------------------------------------------------------------------------
+
+    def substep(self, f):
+        """
+        Integrate velocity to position for kinematic entities.
+        
+        This is called every substep to update DOF positions based on velocities.
+        """
+        # Only integrate for kinematic entities with velocity set
+        if self.is_active and self.n_envs > 0:
+            kernel_integrate_dofs_velocity(
+                f,
+                self.dofs_state,
+                self._sim.dt / self._sim._substeps,
+            )
 
     def substep_pre_coupling(self, f):
         pass

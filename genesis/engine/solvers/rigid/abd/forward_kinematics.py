@@ -1729,3 +1729,32 @@ def kernel_update_cartesian_space(
         force_update_fixed_geoms=force_update_fixed_geoms,
         is_backward=is_backward,
     )
+
+
+@qd.kernel(fastcache=gs.use_fastcache)
+def kernel_integrate_dofs_velocity(
+    f: qd.i32,
+    dofs_state: array_class.DofsState,
+    dt: qd.float32,
+):
+    """
+    Integrate DOF velocity to update DOF position.
+    
+    For kinematic entities, this integrates velocity over time to update position:
+    pos[t+1] = pos[t] + vel[t] * dt
+    
+    Parameters
+    ----------
+    f : int
+        Current substep index (not used, kept for API consistency).
+    dofs_state : DofsState
+        DOF state array containing pos and vel.
+    dt : float
+        Time step for integration.
+    """
+    n_dofs = dofs_state.pos.shape[0]
+    n_envs = dofs_state.pos.shape[1]
+    
+    for i_d, i_b in qd.ndrange(n_dofs, n_envs):
+        # pos += vel * dt
+        dofs_state.pos[i_d, i_b] += dofs_state.vel[i_d, i_b] * dt

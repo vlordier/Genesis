@@ -320,6 +320,9 @@ class Simulator(RBC):
     def substep(self, f):
         self._coupler.preprocess(f)
         self.substep_pre_coupling(f)
+        # Call substep on each active solver for time integration
+        for solver in self._active_solvers:
+            solver.substep(f)
         self._coupler.couple(f)
         self.substep_post_coupling(f)
 
