@@ -201,13 +201,19 @@ class ContactForceSensor(
             return self._get_formatted_data(self._manager.get_cloned_from_cache(self), envs_idx)
 
         n_envs = self._manager._sim.n_envs
+        # Determine actual number of envs being queried
+        if envs_idx is None:
+            n_query_envs = n_envs if n_envs > 0 else 0
+        else:
+            n_query_envs = len(envs_idx)
+
         history_data = []
         for i in range(history_length):
             hist = buffered_data.at(i, envs_idx, cache_slice)
             if n_envs == 0:
                 hist = hist.reshape(3)
             else:
-                hist = hist.reshape(n_envs, 3)
+                hist = hist.reshape(n_query_envs, 3)
             history_data.append(hist)
 
         result = torch.stack(history_data, dim=1)
@@ -218,7 +224,35 @@ class ContactForceSensor(
         """
         Read the ground truth sensor data (without noise).
         """
-        return self.read(envs_idx)
+        envs_idx = self._sanitize_envs_idx(envs_idx)
+        history_length = self._options.history_length
+
+        # Get ground truth from the ground truth cache (no noise/delay/quantization)
+        gt_cache = self._manager.get_cloned_from_cache(self, is_ground_truth=True)
+        cache_slice = slice(self._cache_idx, self._cache_idx + 3)
+
+        if history_length == 1:
+            return self._get_formatted_data(gt_cache, envs_idx)
+
+        # For history, read from the buffered ground truth data
+        buffered_data = self._manager._buffered_data[gs.tc_float]
+        n_envs = self._manager._sim.n_envs
+        if envs_idx is None:
+            n_query_envs = n_envs if n_envs > 0 else 0
+        else:
+            n_query_envs = len(envs_idx)
+
+        history_data = []
+        for i in range(history_length):
+            hist = buffered_data.at(i, envs_idx, cache_slice)
+            if n_envs == 0:
+                hist = hist.reshape(3)
+            else:
+                hist = hist.reshape(n_query_envs, 3)
+            history_data.append(hist)
+
+        result = torch.stack(history_data, dim=1)
+        return result.squeeze(1) if n_envs == 0 else result
 
     def build(self):
         super().build()
@@ -320,7 +354,11 @@ class ContactForceSensor(
         pos = self._link.get_pos(env_idx).reshape((3,))
         quat = self._link.get_quat(env_idx).reshape((4,))
 
-        force = self._manager.get_cloned_from_cache(self, is_ground_truth=False)[0, :3].reshape((3,))
+        cache = self._manager.get_cloned_from_cache(self, is_ground_truth=False)
+        if env_idx is not None:
+            force = cache[env_idx, :3].reshape((3,))
+        else:
+            force = cache[0, :3].reshape((3,))
         vec = tensor_to_array(transform_by_quat(force * self._options.debug_scale, quat))
 
         if self.debug_object is not None:
