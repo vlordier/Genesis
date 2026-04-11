@@ -24,10 +24,6 @@ class PBDBaseEntity(ParticleEntity):
 
         self._kernel_add_uvs_and_faces_to_solver(uvs=uvs, faces=self._vfaces)
 
-        # Add visual vertices for skinning if needed
-        if self._need_skinning:
-            self._add_vverts_to_solver()
-
     @qd.kernel
     def _kernel_add_uvs_and_faces_to_solver(
         self,
