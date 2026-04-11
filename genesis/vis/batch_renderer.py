@@ -32,8 +32,9 @@ def _make_tensor(data, *, dtype: torch.dtype = torch.float32):
 
 
 class GenesisGeomRetriever:
-    def __init__(self, rigid_solver, seg_level):
+    def __init__(self, rigid_solver, pbd_solver, seg_level):
         self.rigid_solver = rigid_solver
+        self.pbd_solver = pbd_solver
         self.seg_color_map = SegmentationColorMap(to_torch=True)
         self.seg_level = seg_level
         self.geom_idxc = None
@@ -42,46 +43,167 @@ class GenesisGeomRetriever:
         self.default_enabled_geom_groups = np.array([self.default_geom_group], dtype=np.int32)
 
     def build(self):
-        self.n_vgeoms = self.rigid_solver.n_vgeoms
-        self.geom_idxc = []
-        vgeoms = self.rigid_solver.vgeoms
-        for vgeom in vgeoms:
-            seg_key = self.get_seg_key(vgeom)
-            seg_idxc = self.seg_color_map.seg_key_to_idxc(seg_key)
-            self.geom_idxc.append(seg_idxc)
-        self.geom_idxc = torch.tensor(self.geom_idxc, dtype=torch.int32, device=gs.device)
+        # Build rigid geom segmentation
+        self.n_rigid_vgeoms = self.rigid_solver.n_vgeoms if self.rigid_solver is not None else 0
+        self.rigid_geom_idxc = []
+        if self.rigid_solver is not None:
+            vgeoms = self.rigid_solver.vgeoms
+            for vgeom in vgeoms:
+                seg_key = self.get_seg_key(vgeom, entity_type="rigid")
+                seg_idxc = self.seg_color_map.seg_key_to_idxc(seg_key)
+                self.rigid_geom_idxc.append(seg_idxc)
+        self.rigid_geom_idxc = (
+            torch.tensor(self.rigid_geom_idxc, dtype=torch.int32, device=gs.device)
+            if self.rigid_geom_idxc
+            else torch.empty((0,), dtype=torch.int32, device=gs.device)
+        )
+
+        # Build PBD entity segmentation
+        self.n_pbd_entities = (
+            len(self.pbd_solver.entities) if self.pbd_solver is not None and self.pbd_solver.is_active else 0
+        )
+        self.pbd_geom_idxc = []
+        if self.pbd_solver is not None and self.pbd_solver.is_active:
+            for i, pbd_entity in enumerate(self.pbd_solver.entities):
+                if pbd_entity.surface.vis_mode == "visual":
+                    seg_key = ("pbd", pbd_entity.idx)
+                    seg_idxc = self.seg_color_map.seg_key_to_idxc(seg_key)
+                    self.pbd_geom_idxc.append(seg_idxc)
+        self.pbd_geom_idxc = (
+            torch.tensor(self.pbd_geom_idxc, dtype=torch.int32, device=gs.device)
+            if self.pbd_geom_idxc
+            else torch.empty((0,), dtype=torch.int32, device=gs.device)
+        )
+
+        # Combine geom indices
+        self.geom_idxc = torch.cat([self.rigid_geom_idxc, self.pbd_geom_idxc], dim=0)
+        self.n_vgeoms = len(self.geom_idxc)
+
         self.seg_color_map.generate_seg_colors()
 
-    def get_seg_key(self, vgeom):
-        if self.seg_level == "geom":
-            return (vgeom.entity.idx, vgeom.link.idx, vgeom.idx)
-        elif self.seg_level == "link":
-            return (vgeom.entity.idx, vgeom.link.idx)
-        elif self.seg_level == "entity":
-            return vgeom.entity.idx
+    def get_seg_key(self, vgeom=None, entity_type="rigid", pbd_entity=None):
+        if entity_type == "rigid":
+            if self.seg_level == "geom":
+                return (vgeom.entity.idx, vgeom.link.idx, vgeom.idx)
+            elif self.seg_level == "link":
+                return (vgeom.entity.idx, vgeom.link.idx)
+            elif self.seg_level == "entity":
+                return vgeom.entity.idx
+            else:
+                gs.raise_exception(f"Unsupported segmentation level: {self.seg_level}")
+        elif entity_type == "pbd":
+            # PBD entities are treated at entity level for segmentation
+            return ("pbd", pbd_entity.idx)
         else:
-            gs.raise_exception(f"Unsupported segmentation level: {self.seg_level}")
+            gs.raise_exception(f"Unsupported entity type: {entity_type}")
+
+    def retrieve_pbd_meshes_static(self):
+        """Retrieve PBD entity visual meshes for batch rendering."""
+        if self.pbd_solver is None or not self.pbd_solver.is_active:
+            return {
+                "mesh_vertices": np.empty((0, 3), dtype=np.float32),
+                "mesh_faces": np.empty((0, 3), dtype=np.int32),
+                "mesh_vertex_offsets": np.array([0], dtype=np.int32),
+                "mesh_face_offsets": np.array([0], dtype=np.int32),
+                "mesh_texcoords": np.empty((0, 2), dtype=np.float32),
+                "mesh_texcoord_offsets": np.array([-1], dtype=np.int32),
+                "geom_types": np.empty((0,), dtype=np.int32),
+                "geom_groups": np.empty((0,), dtype=np.int32),
+                "geom_data_ids": np.empty((0,), dtype=np.int32),
+                "geom_sizes": np.empty((0, 3), dtype=np.float32),
+                "geom_mat_ids": np.empty((0,), dtype=np.int32),
+            }
+
+        mesh_vertices_list = []
+        mesh_faces_list = []
+        mesh_vertex_offsets = [0]
+        mesh_face_offsets = [0]
+        mesh_uvs = []
+        mesh_uv_offsets = []
+        geom_data_ids = []
+        total_verts = 0
+        total_faces = 0
+        total_uv_size = 0
+
+        for pbd_entity in self.pbd_solver.entities:
+            if pbd_entity.surface.vis_mode != "visual":
+                continue
+
+            # Get PBD entity visual mesh
+            vmesh = pbd_entity.vmesh
+            if vmesh is None:
+                continue
+
+            verts = vmesh.verts.astype(np.float32)
+            faces = vmesh.faces.astype(np.int32)
+            uvs = vmesh.uvs.astype(np.float32) if vmesh.uvs is not None else None
+
+            mesh_vertices_list.append(verts)
+            mesh_faces_list.append(faces)
+            mesh_vertex_offsets.append(total_verts + len(verts))
+            mesh_face_offsets.append(total_faces + len(faces))
+
+            # Segmentation ID for this PBD entity
+            seg_key = self.get_seg_key(entity_type="pbd", pbd_entity=pbd_entity)
+            seg_id = self.seg_color_map.seg_key_to_idxc(seg_key)
+            geom_data_ids.append(seg_id)
+
+            if uvs is not None:
+                mesh_uvs.append(uvs)
+                mesh_uv_offsets.append(total_uv_size)
+                total_uv_size += uvs.shape[0]
+            else:
+                mesh_uv_offsets.append(-1)
+
+            total_verts += len(verts)
+            total_faces += len(faces)
+
+        n_pbd_geoms = len(geom_data_ids)
+
+        return {
+            "mesh_vertices": np.vstack(mesh_vertices_list)
+            if mesh_vertices_list
+            else np.empty((0, 3), dtype=np.float32),
+            "mesh_faces": np.vstack(mesh_faces_list) if mesh_faces_list else np.empty((0, 3), dtype=np.int32),
+            "mesh_vertex_offsets": np.array(mesh_vertex_offsets, dtype=np.int32),
+            "mesh_face_offsets": np.array(mesh_face_offsets, dtype=np.int32),
+            "mesh_texcoords": np.concatenate(mesh_uvs, axis=0) if mesh_uvs else np.empty((0, 2), dtype=np.float32),
+            "mesh_texcoord_offsets": np.array(mesh_uv_offsets, dtype=np.int32),
+            "geom_types": np.full((n_pbd_geoms,), 7, dtype=np.int32),  # 7 stands for mesh
+            "geom_groups": np.full((n_pbd_geoms,), self.default_geom_group, dtype=np.int32),
+            "geom_data_ids": np.array(geom_data_ids, dtype=np.int32),
+            "geom_sizes": np.ones((n_pbd_geoms, 3), dtype=np.float32),
+            "geom_mat_ids": np.full((n_pbd_geoms,), 0, dtype=np.int32),  # Placeholder, will be updated
+        }
 
     # FIXME: Use a kernel to do it efficiently
     def retrieve_rigid_meshes_static(self):
         args = {}
-        vgeoms = self.rigid_solver.vgeoms
+        vgeoms = self.rigid_solver.vgeoms if self.rigid_solver is not None else []
 
-        # Retrieve geom data
-        mesh_vertices = self.rigid_solver.vverts_info.init_pos.to_numpy()
-        mesh_faces = self.rigid_solver.vfaces_info.vverts_idx.to_numpy()
-        mesh_vertex_offsets = self.rigid_solver.vgeoms_info.vvert_start.to_numpy()
-        mesh_face_starts = self.rigid_solver.vgeoms_info.vface_start.to_numpy()
-        mesh_face_ends = self.rigid_solver.vgeoms_info.vface_end.to_numpy()
+        # Retrieve rigid geom data
+        if self.rigid_solver is not None:
+            mesh_vertices = self.rigid_solver.vverts_info.init_pos.to_numpy()
+            mesh_faces = self.rigid_solver.vfaces_info.vverts_idx.to_numpy()
+            mesh_vertex_offsets = self.rigid_solver.vgeoms_info.vvert_start.to_numpy()
+            mesh_face_starts = self.rigid_solver.vgeoms_info.vface_start.to_numpy()
+            mesh_face_ends = self.rigid_solver.vgeoms_info.vface_end.to_numpy()
+        else:
+            mesh_vertices = np.empty((0, 3), dtype=np.float32)
+            mesh_faces = np.empty((0, 3), dtype=np.int32)
+            mesh_vertex_offsets = np.array([0], dtype=np.int32)
+            mesh_face_starts = np.array([0], dtype=np.int32)
+            mesh_face_ends = np.array([0], dtype=np.int32)
+
         total_uv_size = 0
         mesh_uvs = []
         mesh_uv_offsets = []
-        for i in range(self.n_vgeoms):
+        for i in range(self.n_rigid_vgeoms):
             mesh_faces[mesh_face_starts[i] : mesh_face_ends[i]] -= mesh_vertex_offsets[i]
 
         geom_data_ids = []
         for vgeom in vgeoms:
-            seg_key = self.get_seg_key(vgeom)
+            seg_key = self.get_seg_key(vgeom, entity_type="rigid")
             seg_id = self.seg_color_map.seg_key_to_idxc(seg_key)
             geom_data_ids.append(seg_id)
             if vgeom.uvs is not None:
@@ -91,16 +213,45 @@ class GenesisGeomRetriever:
             else:
                 mesh_uv_offsets.append(-1)
 
-        args["mesh_vertices"] = mesh_vertices
-        args["mesh_vertex_offsets"] = mesh_vertex_offsets
-        args["mesh_faces"] = mesh_faces
-        args["mesh_face_offsets"] = mesh_face_starts
-        args["mesh_texcoords"] = np.concatenate(mesh_uvs, axis=0) if mesh_uvs else np.empty((0, 2), np.float32)
-        args["mesh_texcoord_offsets"] = np.array(mesh_uv_offsets, np.int32)
-        args["geom_types"] = np.full((self.n_vgeoms,), 7, dtype=np.int32)  # 7 stands for mesh
-        args["geom_groups"] = np.full((self.n_vgeoms,), self.default_geom_group, dtype=np.int32)
-        args["geom_data_ids"] = np.arange(self.n_vgeoms, dtype=np.int32)
-        args["geom_sizes"] = np.ones((self.n_vgeoms, 3), dtype=np.float32)
+        # Retrieve PBD geom data
+        pbd_args = self.retrieve_pbd_meshes_static()
+
+        # Combine rigid and PBD data
+        args["mesh_vertices"] = (
+            np.vstack([mesh_vertices, pbd_args["mesh_vertices"]])
+            if len(pbd_args["mesh_vertices"]) > 0
+            else mesh_vertices
+        )
+        args["mesh_vertex_offsets"] = np.concatenate(
+            [mesh_vertex_offsets, pbd_args["mesh_vertex_offsets"][1:] + len(mesh_vertices)]
+        )
+        args["mesh_faces"] = (
+            np.vstack([mesh_faces, pbd_args["mesh_faces"]]) if len(pbd_args["mesh_faces"]) > 0 else mesh_faces
+        )
+        args["mesh_face_offsets"] = np.concatenate(
+            [mesh_face_starts, pbd_args["mesh_face_offsets"][1:] + len(mesh_faces)]
+        )
+        args["mesh_texcoords"] = np.concatenate(
+            [
+                np.concatenate(mesh_uvs, axis=0) if mesh_uvs else np.empty((0, 2), dtype=np.float32),
+                pbd_args["mesh_texcoords"],
+            ]
+        )
+        args["mesh_texcoord_offsets"] = np.concatenate(
+            [np.array(mesh_uv_offsets, dtype=np.int32), pbd_args["mesh_texcoord_offsets"]]
+        )
+        args["geom_types"] = np.concatenate(
+            [np.full((self.n_rigid_vgeoms,), 7, dtype=np.int32), pbd_args["geom_types"]]
+        )
+        args["geom_groups"] = np.concatenate(
+            [np.full((self.n_rigid_vgeoms,), self.default_geom_group, dtype=np.int32), pbd_args["geom_groups"]]
+        )
+        args["geom_data_ids"] = np.concatenate([np.array(geom_data_ids, dtype=np.int32), pbd_args["geom_data_ids"]])
+        args["geom_sizes"] = (
+            np.vstack([np.ones((self.n_rigid_vgeoms, 3), dtype=np.float32), pbd_args["geom_sizes"]])
+            if len(pbd_args["geom_sizes"]) > 0
+            else np.ones((self.n_rigid_vgeoms, 3), dtype=np.float32)
+        )
         args["enabled_geom_groups"] = self.default_enabled_geom_groups
 
         # Retrieve material data
@@ -260,7 +411,9 @@ class BatchRenderer(RBC):
         self._lights = gs.List()
         self._use_rasterizer = renderer_options.use_rasterizer
         self._renderer = None
-        self._geom_retriever = GenesisGeomRetriever(self._visualizer.scene.rigid_solver, vis_options.segmentation_level)
+        self._geom_retriever = GenesisGeomRetriever(
+            self._visualizer.scene.rigid_solver, self._visualizer.scene.pbd_solver, vis_options.segmentation_level
+        )
         self._data_cache = {}
         self._t = -1
 
