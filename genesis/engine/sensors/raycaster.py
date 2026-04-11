@@ -46,6 +46,8 @@ def kernel_cast_rays(
     free_verts_state: array_class.VertsState,
     verts_info: array_class.VertsInfo,
     faces_info: array_class.FacesInfo,
+    geoms_info: array_class.GeomsInfo,
+    links_info: array_class.LinksInfo,
     bvh_nodes: qd.template(),
     bvh_morton_codes: qd.template(),  # maps sorted leaves to original triangle indices
     links_pos: qd.types.ndarray(ndim=3),  # [n_env, n_sensors, 3]
@@ -59,6 +61,7 @@ def kernel_cast_rays(
     sensor_cache_offsets: qd.types.ndarray(ndim=1),  # [n_sensors] - cache start index for each sensor
     sensor_point_offsets: qd.types.ndarray(ndim=1),  # [n_sensors] - point start index for each sensor
     sensor_point_counts: qd.types.ndarray(ndim=1),  # [n_sensors] - number of points for each sensor
+    entity_idxs: qd.types.ndarray(ndim=1),  # [n_sensors] - entity filter for each sensor (-1 = all entities)
     output_hits: qd.types.ndarray(ndim=2),  # [total_cache_size, n_env]
     eps: float,
 ):
@@ -67,6 +70,8 @@ def kernel_cast_rays(
 
     The result `output_hits` will be a 2D array of shape (total_cache_size, n_env) where in the first dimension,
     each sensor's data is stored as [sensor_points (n_points * 3), sensor_ranges (n_points)].
+
+    If entity_idxs[i_s] >= 0, rays for sensor i_s will only intersect with geometry belonging to that entity.
     """
 
     n_points = ray_starts.shape[0]
@@ -101,6 +106,22 @@ def kernel_cast_rays(
             eps=eps,
         )
 
+        # --- 2b. Entity Filtering ---
+        # If sensor has entity filter, check if hit face belongs to target entity
+        target_entity_idx = entity_idxs[i_s]
+        if hit_face >= 0 and target_entity_idx >= 0:
+            # Get geom index from face
+            hit_geom_idx = faces_info.geom_idx[hit_face]
+            # Get link index from geom
+            hit_link_idx = geoms_info.link_idx[hit_geom_idx]
+            # Get entity index from link
+            hit_entity_idx = links_info.entity_idx[hit_link_idx]
+
+            # If hit entity doesn't match target, treat as no hit
+            if hit_entity_idx != target_entity_idx:
+                hit_face = -1
+                hit_distance = max_range
+
         # --- 3. Process Hit Result ---
         # The format of output_hits is: [sensor1 points][sensor1 ranges][sensor2 points][sensor2 ranges]...
         i_p_sensor = i_p - sensor_point_offsets[i_s]
@@ -123,9 +144,7 @@ def kernel_cast_rays(
                 output_hits[i_p_offset + i_p_sensor * 3 + 2, i_b] = hit_point.z
             else:
                 # Local frame output along provided local ray direction
-                hit_point = dist * qd_normalize(
-                    qd.math.vec3(ray_directions[i_p, 0], ray_directions[i_p, 1], ray_directions[i_p, 2]), eps
-                )
+                hit_point = dist * qd.math.vec3(ray_directions[i_p, 0], ray_directions[i_p, 1], ray_directions[i_p, 2])
                 output_hits[i_p_offset + i_p_sensor * 3 + 0, i_b] = hit_point.x
                 output_hits[i_p_offset + i_p_sensor * 3 + 1, i_b] = hit_point.y
                 output_hits[i_p_offset + i_p_sensor * 3 + 2, i_b] = hit_point.z
@@ -160,6 +179,9 @@ class RaycasterSharedMetadata(RigidSensorMetadataMixin, SharedSensorMetadata):
     sensor_cache_offsets: torch.Tensor = make_tensor_field((0,), dtype_factory=lambda: gs.tc_int)
     sensor_point_offsets: torch.Tensor = make_tensor_field((0,), dtype_factory=lambda: gs.tc_int)
     sensor_point_counts: torch.Tensor = make_tensor_field((0,), dtype_factory=lambda: gs.tc_int)
+
+    # Entity filtering for mesh-specific raycasting
+    entity_idxs: torch.Tensor = make_tensor_field((0,), dtype_factory=lambda: gs.tc_int)
 
 
 class RaycasterData(NamedTuple):
@@ -246,6 +268,10 @@ class RaycasterSensor(RigidSensorMixin, Sensor[RaycasterOptions, RaycasterShared
         no_hit_value = self._options.no_hit_value if self._options.no_hit_value is not None else self._options.max_range
         self._shared_metadata.no_hit_values = concat_with_tensor(self._shared_metadata.no_hit_values, no_hit_value)
 
+        # Store entity filter for mesh-specific raycasting
+        target_entity_idx = self._options.target_entity_idx if self._options.target_entity_idx is not None else -1
+        self._shared_metadata.entity_idxs = concat_with_tensor(self._shared_metadata.entity_idxs, target_entity_idx)
+
     @classmethod
     def reset(cls, shared_metadata: RaycasterSharedMetadata, shared_ground_truth_cache: torch.Tensor, envs_idx):
         super().reset(shared_metadata, shared_ground_truth_cache, envs_idx)
@@ -276,6 +302,8 @@ class RaycasterSensor(RigidSensorMixin, Sensor[RaycasterOptions, RaycasterShared
             shared_metadata.solver.free_verts_state,
             shared_metadata.solver.verts_info,
             shared_metadata.solver.faces_info,
+            shared_metadata.solver.geoms_info,
+            shared_metadata.solver.links_info,
             shared_metadata.bvh.nodes,
             shared_metadata.bvh.morton_codes,
             links_pos,
@@ -289,6 +317,7 @@ class RaycasterSensor(RigidSensorMixin, Sensor[RaycasterOptions, RaycasterShared
             shared_metadata.sensor_cache_offsets,
             shared_metadata.sensor_point_offsets,
             shared_metadata.sensor_point_counts,
+            shared_metadata.entity_idxs,
             shared_ground_truth_cache,
             gs.EPS,
         )
@@ -306,36 +335,53 @@ class RaycasterSensor(RigidSensorMixin, Sensor[RaycasterOptions, RaycasterShared
 
     def _draw_debug(self, context: "RasterizerContext"):
         """
-        Draw hit points as spheres in the scene.
+        Draw debug spheres and rays for visualization.
 
         Only draws for first rendered environment.
         """
         env_idx = context.rendered_envs_idx[0] if self._manager._sim.n_envs > 0 else None
 
-        data = self.read(env_idx)
-        points = data.points.reshape((-1, 3))
+        # Clear previous debug objects
+        for debug_obj in self.debug_objects:
+            context.clear_debug_object(debug_obj)
+        self.debug_objects = []
 
-        pos = self._link.get_pos(env_idx).reshape((3,))
-        quat = self._link.get_quat(env_idx).reshape((4,))
+        # Read sensor data
+        points, distances = self.read(env_idx)
+        points = points.reshape(-1, 3)
+        distances = distances.reshape(-1)
 
-        ray_starts = transform_by_trans_quat(self.ray_starts, pos, quat)
+        # Draw debug spheres at hit points
+        for i, (point, dist) in enumerate(zip(points, distances)):
+            if dist < self._options.max_range - gs.EPS:  # Valid hit
+                if self._options.return_world_frame:
+                    pos = point
+                else:
+                    # Convert local point to world frame
+                    link_pos = self._link.get_pos(env_idx).reshape(3)
+                    link_quat = self._link.get_quat(env_idx).reshape(4)
+                    pos = transform_by_trans_quat(point, link_pos, link_quat)
 
-        if not self._options.return_world_frame:
-            points = transform_by_trans_quat(points + self.ray_starts, pos, quat)
+                debug_sphere = context.draw_debug_sphere(
+                    pos=pos,
+                    radius=self._options.debug_sphere_radius,
+                    color=self._options.debug_ray_hit_color,
+                )
+                self.debug_objects.append(debug_sphere)
 
-        for debug_object in self.debug_objects:
-            context.clear_debug_object(debug_object)
-        self.debug_objects.clear()
+                # Draw ray from sensor to hit point
+                if self._options.return_world_frame:
+                    ray_start = self.ray_starts_world[i].cpu().numpy()
+                else:
+                    ray_start = self.ray_starts[i].cpu().numpy()
+                    link_pos = self._link.get_pos(env_idx).reshape(3)
+                    link_quat = self._link.get_quat(env_idx).reshape(4)
+                    ray_start = transform_by_trans_quat(ray_start, link_pos, link_quat)
 
-        self.debug_objects += [
-            context.draw_debug_spheres(
-                ray_starts,
-                radius=self._options.debug_sphere_radius,
-                color=self._options.debug_ray_start_color,
-            ),
-            context.draw_debug_spheres(
-                points,
-                radius=self._options.debug_sphere_radius,
-                color=self._options.debug_ray_hit_color,
-            ),
-        ]
+                # Draw ray start sphere
+                debug_start = context.draw_debug_sphere(
+                    pos=ray_start,
+                    radius=self._options.debug_sphere_radius * 0.5,
+                    color=self._options.debug_ray_start_color,
+                )
+                self.debug_objects.append(debug_start)

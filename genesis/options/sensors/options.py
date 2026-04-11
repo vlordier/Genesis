@@ -435,6 +435,11 @@ class Raycaster(RigidSensorOptionsMixin["RaycasterSensor"]):
         The value to return for no hit. Defaults to max_range if not specified.
     return_world_frame : bool, optional
         Whether to return points in the world frame. Defaults to False (local frame).
+    target_entity_idx : int, optional
+        The global entity index to raycast against. If provided, rays will only intersect
+        with collision geometry belonging to this entity. If None (default), rays intersect
+        with all collision geometry in the scene. Useful for mesh-specific sensing in
+        manipulation tasks.
     debug_sphere_radius: float, optional
         The radius of each debug sphere drawn in the scene. Defaults to 0.02.
     debug_ray_start_color: array-like[float, float, float, float], optional
@@ -448,6 +453,7 @@ class Raycaster(RigidSensorOptionsMixin["RaycasterSensor"]):
     max_range: PositiveFloat = 20.0
     no_hit_value: float = float("nan")
     return_world_frame: StrictBool = False
+    target_entity_idx: StrictInt | None = Field(default=None, ge=-1)
 
     debug_sphere_radius: PositiveFloat = 0.02
     debug_ray_start_color: Vec4FType = (0.5, 0.5, 1.0, 1.0)
