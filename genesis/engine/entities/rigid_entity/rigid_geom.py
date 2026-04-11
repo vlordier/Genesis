@@ -342,12 +342,18 @@ class RigidGeom(RBC):
         Warning
         -------
         This method currently only updates Python-side tracking attributes.
-        The collider pipeline does not yet consume these flags, so collision
-        detection will not be affected at runtime. This is a known limitation.
+        The collider pipeline does not yet consume these flags for geom-level filtering.
+
+        To disable collision for an entire entity, use entity hibernation instead:
+        >>> entity.hibernate()  # Disables physics for entire entity
+        >>> entity.wake_up()    # Re-enables physics
+
+        For fine-grained geom-level collision control, this feature is planned for a future release.
         """
         gs.logger.warning(
             "`enable_collision()` is not yet integrated with the collider pipeline. "
-            "Collision detection will not be affected by this call."
+            "Collision detection will not be affected by this call. "
+            "Use entity.hibernate()/wake_up() for entity-level collision control."
         )
         if self._solver.is_built:
             self.active_envs_mask = torch.ones(self._solver._B, dtype=torch.bool, device=gs.device)
@@ -363,12 +369,18 @@ class RigidGeom(RBC):
         Warning
         -------
         This method currently only updates Python-side tracking attributes.
-        The collider pipeline does not yet consume these flags, so collision
-        detection will not be affected at runtime. This is a known limitation.
+        The collider pipeline does not yet consume these flags for geom-level filtering.
+
+        To disable collision for an entire entity, use entity hibernation instead:
+        >>> entity.hibernate()  # Disables physics for entire entity
+        >>> entity.wake_up()    # Re-enables physics
+
+        For fine-grained geom-level collision control, this feature is planned for a future release.
         """
         gs.logger.warning(
             "`disable_collision()` is not yet integrated with the collider pipeline. "
-            "Collision detection will not be affected by this call."
+            "Collision detection will not be affected by this call. "
+            "Use entity.hibernate()/wake_up() for entity-level collision control."
         )
         if self._solver.is_built:
             self.active_envs_mask = torch.zeros(self._solver._B, dtype=torch.bool, device=gs.device)
