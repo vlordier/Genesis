@@ -335,6 +335,28 @@ class RigidGeom(RBC):
         if self._solver.is_built:
             self._solver.set_geom_friction(friction, self._idx)
 
+    def enable_collision(self):
+        """
+        Enable collision for this geometry by making it active in all environments.
+        """
+        if self._solver.is_built:
+            self.active_envs_mask = torch.ones(self._solver._B, dtype=torch.bool, device=gs.device)
+            self.active_envs_idx = np.arange(self._solver._B)
+        else:
+            self.active_envs_mask = None
+            self.active_envs_idx = None
+
+    def disable_collision(self):
+        """
+        Disable collision for this geometry by making it inactive in all environments.
+        """
+        if self._solver.is_built:
+            self.active_envs_mask = torch.zeros(self._solver._B, dtype=torch.bool, device=gs.device)
+            self.active_envs_idx = np.array([], dtype=np.int_)
+        else:
+            self.active_envs_mask = None
+            self.active_envs_idx = None
+
     # ------------------------------------------------------------------------------------
     # -------------------------------- real-time state -----------------------------------
     # ------------------------------------------------------------------------------------
@@ -1060,6 +1082,28 @@ class RigidVisGeom(RBC):
         Whether this vgeom is fixed in the world.
         """
         return self.link.is_fixed
+
+    def enable_visualization(self):
+        """
+        Enable visualization for this geometry by making it active in all environments.
+        """
+        if self._solver.is_built:
+            self.active_envs_mask = torch.ones(self._solver._B, dtype=torch.bool, device=gs.device)
+            self.active_envs_idx = np.arange(self._solver._B)
+        else:
+            self.active_envs_mask = None
+            self.active_envs_idx = None
+
+    def disable_visualization(self):
+        """
+        Disable visualization for this geometry by making it inactive in all environments.
+        """
+        if self._solver.is_built:
+            self.active_envs_mask = torch.zeros(self._solver._B, dtype=torch.bool, device=gs.device)
+            self.active_envs_idx = np.array([], dtype=np.int_)
+        else:
+            self.active_envs_mask = None
+            self.active_envs_idx = None
 
     # ------------------------------------------------------------------------------------
     # -------------------------------------- repr ----------------------------------------
