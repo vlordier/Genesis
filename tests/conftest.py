@@ -240,11 +240,22 @@ def _get_gpu_indices():
         try:
             return tuple(range(len(os.listdir(nvidia_gpu_interface_path))))
         except FileNotFoundError:
-            warnings.warn(
-                f"'{nvidia_gpu_interface_path}' is not available. Multi-GPU support will be disabled. This is expected "
-                "on WSL2 where the NVIDIA proc interface is not mounted.",
-                stacklevel=2,
-            )
+            # Fallback to nvidia-smi if /proc interface is not available
+            try:
+                output = (
+                    subprocess.check_output(["nvidia-smi", "--list-gpus"], stderr=subprocess.STDOUT, timeout=10)
+                    .decode("utf-8")
+                    .strip()
+                )
+                # Parse output like "GPU 0: NVIDIA RTX A6000 (UUID: GPU-xxxx)"
+                gpu_lines = [line for line in output.split("\n") if line.startswith("GPU")]
+                return tuple(range(len(gpu_lines)))
+            except (subprocess.SubprocessError, FileNotFoundError):
+                warnings.warn(
+                    f"'{nvidia_gpu_interface_path}' is not available and nvidia-smi failed. Multi-GPU support will be disabled. This is expected "
+                    "on WSL2 where the NVIDIA proc interface is not mounted.",
+                    stacklevel=2,
+                )
 
     return (0,)
 
@@ -267,11 +278,32 @@ def _torch_get_gpu_idx(device):
                 if re.search(rf"GPU UUID:\s+GPU-{device_uuid}", device_info):
                     return device_idx
         except FileNotFoundError:
-            warnings.warn(
-                f"'{nvidia_gpu_interface_path}' is not available. Multi-GPU support will be disabled. This is expected "
-                "on WSL2 where the NVIDIA proc interface is not mounted.",
-                stacklevel=2,
-            )
+            # Fallback to nvidia-smi if /proc interface is not available
+            try:
+                import subprocess
+
+                output = (
+                    subprocess.check_output(
+                        ["nvidia-smi", "--query-gpu=uuid", "--format=csv,noheader,nounits"],
+                        stderr=subprocess.STDOUT,
+                        timeout=10,
+                    )
+                    .decode("utf-8")
+                    .strip()
+                )
+                # Parse output like "GPU-xxxx\nGPU-yyyy\n..."
+                uuids = [line.strip() for line in output.split("\n") if line.strip()]
+                for device_idx, uuid in enumerate(uuids):
+                    if uuid == f"GPU-{device_uuid}":
+                        return device_idx
+                # If not found, return -1 to indicate error
+                return -1
+            except (subprocess.SubprocessError, FileNotFoundError):
+                warnings.warn(
+                    f"'{nvidia_gpu_interface_path}' is not available and nvidia-smi failed. Multi-GPU support will be disabled. This is expected "
+                    "on WSL2 where the NVIDIA proc interface is not mounted.",
+                    stacklevel=2,
+                )
 
     return -1
 
