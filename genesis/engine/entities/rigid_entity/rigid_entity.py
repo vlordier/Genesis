@@ -21,7 +21,7 @@ from genesis.utils import mesh as mu
 from genesis.utils import mjcf as mju
 from genesis.utils import terrain as tu
 from genesis.utils import urdf as uu
-from genesis.utils.misc import DeprecationError, broadcast_tensor, qd_to_numpy, qd_to_torch
+from genesis.utils.misc import DeprecationError, broadcast_tensor, qd_to_numpy, qd_to_torch, tensor_to_array
 from genesis.engine.states.entities import RigidEntityState
 
 from ..base_entity import Entity
@@ -4179,29 +4179,35 @@ class RigidEntity(KinematicEntity):
         hf = self.terrain_hf
         h_scale, v_scale = self.terrain_scale
 
-        x_idx = x / h_scale
-        y_idx = y / h_scale
+        # Transform world position to terrain local frame
+        terrain_pos = tensor_to_array(self.links[0].get_pos())
+        terrain_quat = tensor_to_array(self.links[0].get_quat())
+        local_pos = gu.inv_transform_by_trans_quat(np.array([x, y, 0.0]), terrain_pos, terrain_quat)
+
+        x_idx = local_pos[0] / h_scale
+        y_idx = local_pos[1] / h_scale
 
         x0 = int(np.floor(x_idx))
         y0 = int(np.floor(y_idx))
         x1 = x0 + 1
         y1 = y0 + 1
 
-        if x0 < 0 or y0 < 0 or x1 >= hf.shape[1] or y1 >= hf.shape[0]:
-            if 0 <= x0 < hf.shape[1] and 0 <= y0 < hf.shape[0]:
-                return hf[y0, x0] * v_scale
-            return 0.0
+        # hf is indexed as [row, col] where row corresponds to x and col to y
+        if x0 < 0 or y0 < 0 or x1 >= hf.shape[0] or y1 >= hf.shape[1]:
+            if 0 <= x0 < hf.shape[0] and 0 <= y0 < hf.shape[1]:
+                return hf[x0, y0] * v_scale + terrain_pos[2]
+            return terrain_pos[2]
 
         tx = x_idx - x0
         ty = y_idx - y0
 
-        h00 = hf[y0, x0]
-        h10 = hf[y0, x1]
-        h01 = hf[y1, x0]
-        h11 = hf[y1, x1]
+        h00 = hf[x0, y0]
+        h10 = hf[x1, y0]
+        h01 = hf[x0, y1]
+        h11 = hf[x1, y1]
 
         h = (1 - tx) * (1 - ty) * h00 + tx * (1 - ty) * h10 + (1 - tx) * ty * h01 + tx * ty * h11
-        return h * v_scale
+        return h * v_scale + terrain_pos[2]
 
     @gs.assert_built
     def get_normal_at(self, x: float, y: float) -> np.ndarray:
@@ -4229,36 +4235,44 @@ class RigidEntity(KinematicEntity):
         hf = self.terrain_hf
         h_scale, v_scale = self.terrain_scale
 
-        x_idx = x / h_scale
-        y_idx = y / h_scale
+        # Transform world position to terrain local frame
+        terrain_pos = tensor_to_array(self.links[0].get_pos())
+        terrain_quat = tensor_to_array(self.links[0].get_quat())
+        local_pos = gu.inv_transform_by_trans_quat(np.array([x, y, 0.0]), terrain_pos, terrain_quat)
+
+        x_idx = local_pos[0] / h_scale
+        y_idx = local_pos[1] / h_scale
 
         x0 = int(np.floor(x_idx))
         y0 = int(np.floor(y_idx))
         x1 = x0 + 1
         y1 = y0 + 1
 
-        if x0 < 0 or y0 < 0 or x1 >= hf.shape[1] or y1 >= hf.shape[0]:
-            return np.array([0.0, 0.0, 1.0])
+        # hf is indexed as [row, col] where row corresponds to x and col to y
+        if x0 < 0 or y0 < 0 or x1 >= hf.shape[0] or y1 >= hf.shape[1]:
+            normal_local = np.array([0.0, 0.0, 1.0])
+            return gu.transform_by_quat(normal_local, terrain_quat)
 
         tx = x_idx - x0
         ty = y_idx - y0
 
-        h00 = hf[y0, x0]
-        h10 = hf[y0, x1]
-        h01 = hf[y1, x0]
-        h11 = hf[y1, x1]
+        h00 = hf[x0, y0]
+        h10 = hf[x1, y0]
+        h01 = hf[x0, y1]
+        h11 = hf[x1, y1]
 
         dz_dx = ((1 - ty) * (h10 - h00) + ty * (h11 - h01)) * v_scale / h_scale
         dz_dy = ((1 - tx) * (h01 - h00) + tx * (h11 - h10)) * v_scale / h_scale
 
-        normal = np.array([-dz_dx, -dz_dy, 1.0])
-        normal_norm = np.linalg.norm(normal)
+        normal_local = np.array([-dz_dx, -dz_dy, 1.0])
+        normal_norm = np.linalg.norm(normal_local)
         if normal_norm > 1e-8:
-            normal = normal / normal_norm
+            normal_local = normal_local / normal_norm
         else:
-            normal = np.array([0.0, 0.0, 1.0])
+            normal_local = np.array([0.0, 0.0, 1.0])
 
-        return normal
+        # Transform normal from terrain local frame to world frame
+        return gu.transform_by_quat(normal_local, terrain_quat)
 
     # ------------------------------------------------------------------------------------
     # ----------------------------------- properties -------------------------------------
