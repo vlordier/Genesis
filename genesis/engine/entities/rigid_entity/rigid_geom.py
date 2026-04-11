@@ -338,7 +338,17 @@ class RigidGeom(RBC):
     def enable_collision(self):
         """
         Enable collision for this geometry by making it active in all environments.
+
+        Warning
+        -------
+        This method currently only updates Python-side tracking attributes.
+        The collider pipeline does not yet consume these flags, so collision
+        detection will not be affected at runtime. This is a known limitation.
         """
+        gs.logger.warning(
+            "`enable_collision()` is not yet integrated with the collider pipeline. "
+            "Collision detection will not be affected by this call."
+        )
         if self._solver.is_built:
             self.active_envs_mask = torch.ones(self._solver._B, dtype=torch.bool, device=gs.device)
             self.active_envs_idx = np.arange(self._solver._B)
@@ -349,7 +359,17 @@ class RigidGeom(RBC):
     def disable_collision(self):
         """
         Disable collision for this geometry by making it inactive in all environments.
+
+        Warning
+        -------
+        This method currently only updates Python-side tracking attributes.
+        The collider pipeline does not yet consume these flags, so collision
+        detection will not be affected at runtime. This is a known limitation.
         """
+        gs.logger.warning(
+            "`disable_collision()` is not yet integrated with the collider pipeline. "
+            "Collision detection will not be affected by this call."
+        )
         if self._solver.is_built:
             self.active_envs_mask = torch.zeros(self._solver._B, dtype=torch.bool, device=gs.device)
             self.active_envs_idx = np.array([], dtype=np.int_)
