@@ -190,22 +190,27 @@ class ContactForceSensor(
     def read(self, envs_idx=None) -> torch.Tensor:
         """
         Read the sensor data (with noise applied if applicable).
+
+        When ``history_length == 1`` (default), returns the current processed force reading
+        with noise/delay/clipping applied, shaped ``(3,)`` for non-batched or
+        ``(n_envs, 3)`` for batched scenes.
+
+        When ``history_length > 1``, returns a history buffer of shape
+        ``(history_length, 3)`` (non-batched) or ``(n_envs, history_length, 3)`` (batched),
+        where index 0 is the most recent step. Note: the history buffer stores
+        ground-truth values (before noise/delay) since the underlying ring buffer is used
+        for the delay mechanism and is written before post-processing.
         """
         envs_idx = self._sanitize_envs_idx(envs_idx)
         history_length = self._options.history_length
 
-        buffered_data = self._manager._buffered_data[gs.tc_float]
-        cache_slice = slice(self._cache_idx, self._cache_idx + 3)
-
         if history_length == 1:
             return self._get_formatted_data(self._manager.get_cloned_from_cache(self), envs_idx)
 
+        buffered_data = self._manager._buffered_data[gs.tc_float]
+        cache_slice = slice(self._cache_idx, self._cache_idx + 3)
         n_envs = self._manager._sim.n_envs
-        # Determine actual number of envs being queried
-        if envs_idx is None:
-            n_query_envs = n_envs if n_envs > 0 else 0
-        else:
-            n_query_envs = len(envs_idx)
+        n_query_envs = len(envs_idx)
 
         history_data = []
         for i in range(history_length):
@@ -216,31 +221,35 @@ class ContactForceSensor(
                 hist = hist.reshape(n_query_envs, 3)
             history_data.append(hist)
 
-        result = torch.stack(history_data, dim=1)
-        return result.squeeze(1) if n_envs == 0 else result
+        # Non-batched: stack along dim=0 → (history_length, 3)
+        # Batched: stack along dim=1 → (n_envs, history_length, 3)
+        stack_dim = 0 if n_envs == 0 else 1
+        return torch.stack(history_data, dim=stack_dim)
 
     @gs.assert_built
     def read_ground_truth(self, envs_idx=None) -> torch.Tensor:
         """
-        Read the ground truth sensor data (without noise).
+        Read the ground truth sensor data (without noise/delay/clipping).
+
+        When ``history_length == 1`` (default), returns the current ground-truth force
+        shaped ``(3,)`` (non-batched) or ``(n_envs, 3)`` (batched).
+
+        When ``history_length > 1``, returns a history buffer of shape
+        ``(history_length, 3)`` (non-batched) or ``(n_envs, history_length, 3)`` (batched),
+        where index 0 is the most recent step.
         """
         envs_idx = self._sanitize_envs_idx(envs_idx)
         history_length = self._options.history_length
 
-        # Get ground truth from the ground truth cache (no noise/delay/quantization)
         gt_cache = self._manager.get_cloned_from_cache(self, is_ground_truth=True)
         cache_slice = slice(self._cache_idx, self._cache_idx + 3)
 
         if history_length == 1:
             return self._get_formatted_data(gt_cache, envs_idx)
 
-        # For history, read from the buffered ground truth data
         buffered_data = self._manager._buffered_data[gs.tc_float]
         n_envs = self._manager._sim.n_envs
-        if envs_idx is None:
-            n_query_envs = n_envs if n_envs > 0 else 0
-        else:
-            n_query_envs = len(envs_idx)
+        n_query_envs = len(envs_idx)
 
         history_data = []
         for i in range(history_length):
@@ -251,8 +260,10 @@ class ContactForceSensor(
                 hist = hist.reshape(n_query_envs, 3)
             history_data.append(hist)
 
-        result = torch.stack(history_data, dim=1)
-        return result.squeeze(1) if n_envs == 0 else result
+        # Non-batched: stack along dim=0 → (history_length, 3)
+        # Batched: stack along dim=1 → (n_envs, history_length, 3)
+        stack_dim = 0 if n_envs == 0 else 1
+        return torch.stack(history_data, dim=stack_dim)
 
     def build(self):
         super().build()
