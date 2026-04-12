@@ -1535,3 +1535,173 @@ def test_proximity_sensor_box_sphere(n_envs, show_viewer, tol):
         tol=tol,
         err_msg="When out of range, points should be the probe position in world frame",
     )
+
+
+# ------------------------------------------------------------------------------------------
+# -------------------- ContactForce sensor history_length feature --------------------------
+# ------------------------------------------------------------------------------------------
+
+
+def _make_contact_force_scene(n_envs, history_length, gravity=-10.0, noise=0.0, delay=0.0):
+    """Build a minimal scene with a ContactForce sensor with specified history_length."""
+    scene = gs.Scene(
+        sim_options=gs.options.SimOptions(gravity=(0.0, 0.0, gravity)),
+        profiling_options=gs.options.ProfilingOptions(show_FPS=False),
+        show_viewer=False,
+    )
+    floor = scene.add_entity(morph=gs.morphs.Plane())
+    box = scene.add_entity(
+        morph=gs.morphs.Box(size=(0.2, 0.2, 0.2), pos=(0.0, 0.0, 0.11)),
+        material=gs.materials.Rigid(rho=100.0),
+    )
+    sensor = scene.add_sensor(
+        gs.sensors.ContactForce(
+            entity_idx=box.idx,
+            history_length=history_length,
+            noise=noise,
+            delay=delay,
+        )
+    )
+    scene.build(n_envs=n_envs)
+    return scene, box, sensor
+
+
+@pytest.mark.required
+@pytest.mark.parametrize("n_envs", [0, 2])
+def test_contact_force_history_length_1_shape(n_envs, tol):
+    """history_length=1 (default) must return same shape as no history."""
+    scene, box, sensor = _make_contact_force_scene(n_envs, history_length=1)
+    for _ in range(5):
+        scene.step()
+
+    result = sensor.read()
+    if n_envs == 0:
+        assert result.shape == (3,), f"Expected (3,), got {result.shape}"
+    else:
+        assert result.shape == (n_envs, 3), f"Expected ({n_envs}, 3), got {result.shape}"
+
+
+@pytest.mark.required
+@pytest.mark.parametrize("n_envs", [0, 2])
+@pytest.mark.parametrize("history_length", [2, 5])
+def test_contact_force_history_shape(n_envs, history_length, tol):
+    """history_length > 1: read() must return (history_length, 3) / (n_envs, history_length, 3)."""
+    scene, box, sensor = _make_contact_force_scene(n_envs, history_length=history_length)
+    # Run enough steps to fill the history buffer
+    for _ in range(history_length + 5):
+        scene.step()
+
+    result = sensor.read()
+    result_gt = sensor.read_ground_truth()
+
+    if n_envs == 0:
+        assert result.shape == (history_length, 3), (
+            f"read() shape: expected ({history_length}, 3), got {result.shape}"
+        )
+        assert result_gt.shape == (history_length, 3), (
+            f"read_ground_truth() shape: expected ({history_length}, 3), got {result_gt.shape}"
+        )
+    else:
+        assert result.shape == (n_envs, history_length, 3), (
+            f"read() shape: expected ({n_envs}, {history_length}, 3), got {result.shape}"
+        )
+        assert result_gt.shape == (n_envs, history_length, 3), (
+            f"read_ground_truth() shape: expected ({n_envs}, {history_length}, 3), got {result_gt.shape}"
+        )
+
+
+@pytest.mark.required
+@pytest.mark.parametrize("n_envs", [0, 2])
+def test_contact_force_history_no_transpose(n_envs, tol):
+    """Verify history axis ordering: result[..., 0, :] should be the most recent reading."""
+    scene, box, sensor = _make_contact_force_scene(n_envs, history_length=3)
+
+    # Step until settled (box on floor, non-zero force)
+    for _ in range(30):
+        scene.step()
+
+    history = sensor.read_ground_truth()
+    # The most-recent reading (slot 0) should have a non-zero z-force (gravity)
+    # The shape must be (..., history_length=3, 3) not (..., 3, 3-ish)
+    if n_envs == 0:
+        # history shape: (3, 3) — first dim is time, second is xyz
+        assert history.shape == (3, 3)
+        # Most recent force slice has a z component
+        z_now = history[0, 2]
+    else:
+        assert history.shape == (n_envs, 3, 3)
+        z_now = history[0, 0, 2]  # env 0, most recent, z
+
+    assert z_now.abs() > 0.1, f"Expected non-zero contact force at slot 0, got {z_now}"
+
+
+@pytest.mark.required
+@pytest.mark.parametrize("n_envs", [0, 2])
+def test_contact_force_history_envs_idx_subset(n_envs, tol):
+    """Requesting a subset of envs with history_length > 1 must not raise and return correct shape."""
+    if n_envs == 0:
+        pytest.skip("envs_idx subset only relevant for batched scenes")
+
+    history_length = 4
+    scene, box, sensor = _make_contact_force_scene(n_envs, history_length=history_length)
+    for _ in range(10):
+        scene.step()
+
+    subset = torch.tensor([0])
+    result = sensor.read(envs_idx=subset)
+    assert result.shape == (1, history_length, 3), (
+        f"Subset read shape: expected (1, {history_length}, 3), got {result.shape}"
+    )
+
+
+@pytest.mark.required
+def test_contact_force_history_length_1_ground_truth_is_noiseless(tol):
+    """read_ground_truth() must return noise-free force even when noise is configured."""
+    GRAVITY = -10.0
+    NOISE = 5.0  # very large noise to make a clear distinction
+    scene, box, sensor = _make_contact_force_scene(
+        n_envs=0, history_length=1, gravity=GRAVITY, noise=NOISE
+    )
+    for _ in range(50):
+        scene.step()
+
+    gt = sensor.read_ground_truth()
+    noisy = sensor.read()
+
+    # Ground truth z-force should match gravity (mass = 0.2^3 * 100 = 0.8 kg, F = m*g)
+    expected_fz = 0.8 * abs(GRAVITY)
+    assert abs(gt[2].item() - expected_fz) < 0.5, (
+        f"GT z-force {gt[2].item():.3f} too far from expected {expected_fz:.3f}"
+    )
+    # With large noise the noisy reading should differ from GT
+    assert not torch.allclose(gt, noisy, atol=0.1), (
+        "read() and read_ground_truth() should differ when noise is large"
+    )
+
+
+@pytest.mark.required
+@pytest.mark.parametrize("history_length", [1, 3])
+def test_contact_force_history_before_and_after_contact(history_length, tol):
+    """Before contact: ground-truth force must be zero. After contact: non-zero."""
+    GRAVITY = -10.0
+    scene, box, sensor = _make_contact_force_scene(n_envs=0, history_length=history_length)
+
+    # Single step from rest — box not yet touching floor
+    scene.step()
+    gt_before = sensor.read_ground_truth()
+    if history_length == 1:
+        assert_allclose(gt_before, 0.0, atol=1e-6)
+    else:
+        # All history slots should be zero before any contact
+        assert_allclose(gt_before, 0.0, atol=1e-6)
+
+    # Simulate until settled
+    for _ in range(50):
+        scene.step()
+
+    gt_after = sensor.read_ground_truth()
+    if history_length == 1:
+        assert gt_after[2].abs() > 0.1, f"Expected non-zero z-force after contact, got {gt_after}"
+    else:
+        # Most recent slot (index 0) should be non-zero
+        assert gt_after[0, 2].abs() > 0.1, f"Expected non-zero force at slot 0 after contact, got {gt_after}"

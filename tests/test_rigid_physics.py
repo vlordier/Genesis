@@ -5793,3 +5793,346 @@ def test_energy_analytical_and_conservation(show_viewer, tol, integrator):
     # Damped sphere_b: energy strictly decreased
     te_b_final = ke_b[-1] + pe_b[-1]
     assert te_b_final < te_initial
+
+
+# ------------------------------------------------------------------------------------------
+# ------------------------ Terrain get_height_at / get_normal_at ---------------------------
+# ------------------------------------------------------------------------------------------
+
+
+def _make_ramp_hf(n_rows, n_cols, slope_x=1.0, slope_y=0.0):
+    """Return a height field with a linear ramp along x (rows), optionally along y (cols).
+
+    hf[i, j] = slope_x * i + slope_y * j  (raw integer units, scaled by v_scale externally)
+    """
+    rows = np.arange(n_rows, dtype=np.float32)
+    cols = np.arange(n_cols, dtype=np.float32)
+    return (slope_x * rows[:, None] + slope_y * cols[None, :]).astype(np.float32)
+
+
+def _build_terrain_scene(hf, h_scale, v_scale, pos=(0.0, 0.0, 0.0), euler=(0.0, 0.0, 0.0)):
+    """Create a minimal scene with a single terrain entity from a raw height field array."""
+    scene = gs.Scene(show_viewer=False, show_FPS=False)
+    terrain = scene.add_entity(
+        gs.morphs.Terrain(
+            height_field=hf,
+            horizontal_scale=h_scale,
+            vertical_scale=v_scale,
+            pos=pos,
+            euler=euler,
+        )
+    )
+    scene.build()
+    return scene, terrain
+
+
+# ---- fixtures shared across terrain tests -----------------------------------------------
+
+@pytest.fixture(
+    params=[
+        pytest.param((10, 10), id="square"),
+        pytest.param((8, 12), id="rectangular"),
+    ]
+)
+def terrain_shape(request):
+    return request.param
+
+
+@pytest.fixture(
+    params=[
+        pytest.param((0.25, 0.1), id="h0.25_v0.1"),
+        pytest.param((0.5, 0.5), id="h0.5_v0.5"),
+    ]
+)
+def terrain_scales(request):
+    return request.param  # (h_scale, v_scale)
+
+
+# ---- correctness tests ------------------------------------------------------------------
+
+@pytest.mark.required
+def test_terrain_get_height_flat(show_viewer):
+    """Flat terrain: get_height_at returns a constant height (terrain z-offset) everywhere."""
+    n_rows, n_cols = 16, 16
+    h_scale, v_scale = 0.25, 0.1
+    pos_z = 1.5
+    hf = np.ones((n_rows, n_cols), dtype=np.float32) * 5.0  # constant raw height
+
+    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale, pos=(0.0, 0.0, pos_z))
+
+    expected_height = 5.0 * v_scale + pos_z
+    # Sample a grid of interior points
+    xs = np.linspace(0.1, (n_rows - 2) * h_scale - 0.01, 7)
+    ys = np.linspace(0.1, (n_cols - 2) * h_scale - 0.01, 7)
+    for x in xs:
+        for y in ys:
+            h = terrain.get_height_at(float(x), float(y))
+            assert abs(h - expected_height) < 1e-5, (
+                f"Expected {expected_height:.6f} at ({x:.3f},{y:.3f}), got {h:.6f}"
+            )
+
+    # Flat terrain → normal should be (0,0,1)
+    for x in xs:
+        for y in ys:
+            n = terrain.get_normal_at(float(x), float(y))
+            assert_allclose(n, np.array([0.0, 0.0, 1.0]), atol=1e-5)
+
+
+@pytest.mark.required
+@pytest.mark.parametrize("terrain_shape,terrain_scales", [
+    ((10, 10), (0.25, 0.1)),
+    ((8, 12), (0.5, 0.2)),
+    ((20, 15), (0.1, 0.05)),
+], indirect=True)
+def test_terrain_get_height_ramp_x(terrain_shape, terrain_scales, tol):
+    """Ramp along x: height should increase linearly; normal should point away from slope."""
+    n_rows, n_cols = terrain_shape
+    h_scale, v_scale = terrain_scales
+    slope = 2.0  # raw units per row
+
+    hf = _make_ramp_hf(n_rows, n_cols, slope_x=slope, slope_y=0.0)
+    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
+
+    # Sample interior points (avoid last row/col where x1/y1 would be out of bounds)
+    x_vals = np.linspace(h_scale * 0.5, (n_rows - 2) * h_scale - 0.01, 6)
+    y_vals = np.linspace(h_scale * 0.5, (n_cols - 2) * h_scale - 0.01, 4)
+
+    for x in x_vals:
+        for y in y_vals:
+            h = terrain.get_height_at(float(x), float(y))
+            # Expected: hf is linear in x at slope raw_units/row → slope*v_scale/h_scale per world-x
+            expected_h = (x / h_scale) * slope * v_scale
+            assert abs(h - expected_h) < 1e-4, (
+                f"height mismatch at ({x:.3f},{y:.3f}): expected {expected_h:.6f}, got {h:.6f}"
+            )
+
+    # Normal should have a negative x-component (slope goes up in +x direction)
+    # and zero y-component
+    for x in x_vals:
+        for y in y_vals:
+            n = terrain.get_normal_at(float(x), float(y))
+            assert n[0] < 0, f"Normal x should be negative for upward x-ramp, got {n}"
+            assert abs(n[1]) < 1e-5, f"Normal y should be 0 for pure x-ramp, got {n}"
+            assert n[2] > 0, f"Normal z should be positive, got {n}"
+            assert abs(np.linalg.norm(n) - 1.0) < 1e-6, f"Normal not unit length: {n}"
+
+
+@pytest.mark.required
+def test_terrain_get_height_non_symmetric(tol):
+    """Non-symmetric height field: x/y axis must not be swapped.
+
+    Uses distinct slopes along x and y so a transposed access pattern
+    would produce noticeably different heights.
+    """
+    n_rows, n_cols = 10, 20  # asymmetric shape
+    h_scale, v_scale = 0.25, 0.1
+    slope_x, slope_y = 3.0, 7.0  # very different slopes
+
+    hf = _make_ramp_hf(n_rows, n_cols, slope_x=slope_x, slope_y=slope_y)
+    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
+
+    # Interior test point
+    x, y = 1.0, 2.0  # well inside both axes
+    h = terrain.get_height_at(x, y)
+
+    # Expected: linear combination
+    x_idx = x / h_scale
+    y_idx = y / h_scale
+    x0, y0 = int(np.floor(x_idx)), int(np.floor(y_idx))
+    tx, ty = x_idx - x0, y_idx - y0
+
+    h00 = hf[x0, y0]
+    h10 = hf[x0 + 1, y0]
+    h01 = hf[x0, y0 + 1]
+    h11 = hf[x0 + 1, y0 + 1]
+
+    if tx <= ty:
+        expected_h = (h00 + (h11 - h01) * tx + (h01 - h00) * ty) * v_scale
+    else:
+        expected_h = (h00 + (h10 - h00) * tx + (h11 - h10) * ty) * v_scale
+
+    assert abs(h - expected_h) < 1e-5, f"Axis swap detected: got {h:.6f}, expected {expected_h:.6f}"
+
+    # Sanity check: if axes were swapped, the result would be significantly different
+    h_swapped_x, h_swapped_y = hf[y0, x0], hf[y0, x0]  # noqa: intentional wrong access
+    assert abs(hf[x0, y0] - hf[y0, x0]) > 0.5, (
+        "Test not sensitive enough: choose a point where swapped access differs significantly."
+    )
+
+
+@pytest.mark.required
+def test_terrain_get_height_triangle_consistency(tol):
+    """Both triangles in a cell should be consistent at the shared diagonal edge.
+
+    A point exactly on the diagonal (tx == ty) must return the same height
+    from both triangle formulas.
+    """
+    n_rows, n_cols = 8, 8
+    h_scale, v_scale = 0.5, 0.2
+
+    # Arbitrary non-flat height field
+    rng = np.random.default_rng(42)
+    hf = rng.uniform(0.0, 5.0, (n_rows, n_cols)).astype(np.float32)
+    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
+
+    # Query at the diagonal of each interior cell: tx == ty == 0.5
+    for i in range(n_rows - 2):
+        for j in range(n_cols - 2):
+            x_diag = (i + 0.5) * h_scale
+            y_diag = (j + 0.5) * h_scale
+            h_at = terrain.get_height_at(x_diag, y_diag)
+
+            h00 = hf[i, j]
+            h11 = hf[i + 1, j + 1]
+            h01 = hf[i, j + 1]
+            # At tx=ty=0.5 both formulas should give the same result:
+            h_upper = h00 + (h11 - h01) * 0.5 + (h01 - h00) * 0.5  # = (h00 + h11) / 2
+            expected = h_upper * v_scale
+            assert abs(h_at - expected) < 1e-5, (
+                f"Diagonal inconsistency at cell ({i},{j}): got {h_at:.6f}, expected {expected:.6f}"
+            )
+
+
+@pytest.mark.required
+def test_terrain_get_height_out_of_bounds(tol):
+    """Out-of-bounds queries must return terrain z-offset, never edge heights."""
+    n_rows, n_cols = 10, 10
+    h_scale, v_scale = 0.25, 0.1
+    pos_z = 2.0
+
+    # Non-zero height field so edge height would differ from pos_z
+    hf = np.full((n_rows, n_cols), 10.0, dtype=np.float32)
+    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale, pos=(0.0, 0.0, pos_z))
+
+    terrain_x_max = (n_rows - 1) * h_scale  # last valid x is (n_rows-2)*h_scale for bilinear
+
+    oob_cases = [
+        (-0.01, 0.5),                          # x too small
+        (0.5, -0.01),                          # y too small
+        (terrain_x_max + 0.01, 0.5),           # x just beyond last node
+        (0.5, terrain_x_max + 0.01),           # y just beyond last node
+        (terrain_x_max - 0.01, 0.5),           # edge-strip: x0 valid but x1 out
+        (100.0, 100.0),                         # far outside
+    ]
+    for x, y in oob_cases:
+        h = terrain.get_height_at(float(x), float(y))
+        assert abs(h - pos_z) < 1e-6, (
+            f"OOB query at ({x:.3f},{y:.3f}) returned {h:.6f} instead of pos_z={pos_z}"
+        )
+
+    # Normals out-of-bounds should return world-up (terrain at identity rotation)
+    for x, y in oob_cases:
+        n = terrain.get_normal_at(float(x), float(y))
+        assert_allclose(n, np.array([0.0, 0.0, 1.0]), atol=1e-5)
+
+
+@pytest.mark.required
+@pytest.mark.parametrize("pos,euler", [
+    pytest.param((3.0, -2.0, 0.5), (0.0, 0.0, 0.0), id="translated"),
+    pytest.param((0.0, 0.0, 0.0), (0.0, 0.0, 45.0), id="yaw_45deg"),
+    pytest.param((1.0, 2.0, 0.3), (0.0, 0.0, 30.0), id="translated_and_yawed"),
+])
+def test_terrain_get_height_pose_transform(pos, euler, tol):
+    """Terrain pose (translation + rotation) must be correctly applied.
+
+    Querying the world position of a known terrain vertex must return the
+    exact height stored in the height field.
+    """
+    import genesis.utils.geom as gu
+
+    n_rows, n_cols = 12, 12
+    h_scale, v_scale = 0.5, 0.3
+
+    rng = np.random.default_rng(7)
+    hf = rng.uniform(0.0, 3.0, (n_rows, n_cols)).astype(np.float32)
+
+    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale, pos=pos, euler=euler)
+
+    terrain_pos = np.array(terrain.links[0].get_pos().cpu().numpy())
+    terrain_quat = np.array(terrain.links[0].get_quat().cpu().numpy())
+
+    # Pick a few interior grid vertices and query their world position
+    for (i, j) in [(1, 1), (3, 5), (n_rows // 2, n_cols // 2), (n_rows - 3, n_cols - 3)]:
+        # Local position of the vertex
+        local_pt = np.array([i * h_scale, j * h_scale, hf[i, j] * v_scale])
+        world_pt = gu.transform_by_trans_quat(local_pt, terrain_pos, terrain_quat)
+
+        h_queried = terrain.get_height_at(float(world_pt[0]), float(world_pt[1]))
+        expected_h = float(world_pt[2])
+
+        assert abs(h_queried - expected_h) < 2e-4, (
+            f"Pose transform mismatch at vertex ({i},{j}): got {h_queried:.6f}, expected {expected_h:.6f}"
+        )
+
+
+@pytest.mark.required
+def test_terrain_get_normal_unit_length_and_direction(tol):
+    """Normals must always have unit length and face away from the ground."""
+    n_rows, n_cols = 14, 14
+    h_scale, v_scale = 0.3, 0.2
+
+    rng = np.random.default_rng(0)
+    hf = rng.uniform(0.0, 4.0, (n_rows, n_cols)).astype(np.float32)
+    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
+
+    xs = np.linspace(h_scale * 0.5, (n_rows - 2) * h_scale - 0.01, 8)
+    ys = np.linspace(h_scale * 0.5, (n_cols - 2) * h_scale - 0.01, 8)
+
+    for x in xs:
+        for y in ys:
+            n = terrain.get_normal_at(float(x), float(y))
+            assert abs(np.linalg.norm(n) - 1.0) < 1e-6, f"Normal not unit length at ({x},{y}): {n}"
+            assert n[2] > 0, f"Normal z should be positive at ({x},{y}): {n}"
+
+
+@pytest.mark.required
+@pytest.mark.parametrize("cell_i,cell_j", [
+    pytest.param(2, 3, id="cell_2_3"),
+    pytest.param(5, 1, id="cell_5_1"),
+])
+def test_terrain_triangle_selection_both_halves(cell_i, cell_j, tol):
+    """Both triangle halves in a cell must produce correct heights and normals.
+
+    Points in the upper-left (tx<=ty) and lower-right (tx>ty) triangle
+    must match the analytic formula exactly, and their normals must be
+    consistent with the respective face orientation.
+    """
+    n_rows, n_cols = 10, 10
+    h_scale, v_scale = 0.4, 0.15
+
+    hf = np.zeros((n_rows, n_cols), dtype=np.float32)
+    # Set the four corners of the test cell to known values
+    h00, h10, h01, h11 = 0.0, 2.0, 4.0, 1.0
+    hf[cell_i,     cell_j    ] = h00
+    hf[cell_i + 1, cell_j    ] = h10
+    hf[cell_i,     cell_j + 1] = h01
+    hf[cell_i + 1, cell_j + 1] = h11
+
+    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
+
+    # Upper-left triangle: tx=0.2, ty=0.7 (ty > tx)
+    tx_ul, ty_ul = 0.2, 0.7
+    x_ul = (cell_i + tx_ul) * h_scale
+    y_ul = (cell_j + ty_ul) * h_scale
+    expected_ul = (h00 + (h11 - h01) * tx_ul + (h01 - h00) * ty_ul) * v_scale
+    assert abs(terrain.get_height_at(x_ul, y_ul) - expected_ul) < 1e-5
+
+    # Lower-right triangle: tx=0.8, ty=0.3 (tx > ty)
+    tx_lr, ty_lr = 0.8, 0.3
+    x_lr = (cell_i + tx_lr) * h_scale
+    y_lr = (cell_j + ty_lr) * h_scale
+    expected_lr = (h00 + (h10 - h00) * tx_lr + (h11 - h10) * ty_lr) * v_scale
+    assert abs(terrain.get_height_at(x_lr, y_lr) - expected_lr) < 1e-5
+
+    # Normals: upper-left and lower-right triangles have different gradients here
+    n_ul = terrain.get_normal_at(x_ul, y_ul)
+    n_lr = terrain.get_normal_at(x_lr, y_lr)
+    # Both must be unit vectors pointing upward
+    assert abs(np.linalg.norm(n_ul) - 1.0) < 1e-6
+    assert abs(np.linalg.norm(n_lr) - 1.0) < 1e-6
+    assert n_ul[2] > 0
+    assert n_lr[2] > 0
+    # With these values the two triangles have different slopes so normals differ
+    assert not np.allclose(n_ul, n_lr, atol=1e-3), (
+        "Normals for upper-left and lower-right triangle should differ for this height field"
+    )
