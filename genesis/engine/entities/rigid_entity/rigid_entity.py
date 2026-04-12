@@ -4155,7 +4155,7 @@ class RigidEntity(KinematicEntity):
         return mass
 
     @gs.assert_built
-    def get_height_at(self, x: float, y: float) -> float:
+    def get_height_at(self, x: float, y: float, env_idx: int | None = None) -> float:
         """
         Get terrain height at world position (x, y).
 
@@ -4170,6 +4170,8 @@ class RigidEntity(KinematicEntity):
             World x position.
         y : float
             World y position.
+        env_idx : int, optional
+            Environment index for batched scenes. Required when ``n_envs > 0``.
 
         Returns
         -------
@@ -4183,9 +4185,10 @@ class RigidEntity(KinematicEntity):
         hf = self.terrain_hf
         h_scale, v_scale = self.terrain_scale
 
-        # Transform world position to terrain local frame
-        terrain_pos = tensor_to_array(self.links[0].get_pos())
-        terrain_quat = tensor_to_array(self.links[0].get_quat())
+        # Transform world position to terrain local frame.
+        # .reshape((3,)) handles both non-batched (3,) and batched (1,3) returns.
+        terrain_pos = tensor_to_array(self.links[0].get_pos(env_idx).reshape((3,)))
+        terrain_quat = tensor_to_array(self.links[0].get_quat(env_idx).reshape((4,)))
         local_pos = gu.inv_transform_by_trans_quat(np.array([x, y, 0.0]), terrain_pos, terrain_quat)
 
         x_idx = local_pos[0] / h_scale
@@ -4221,7 +4224,7 @@ class RigidEntity(KinematicEntity):
         return h * v_scale + terrain_pos[2]
 
     @gs.assert_built
-    def get_normal_at(self, x: float, y: float) -> np.ndarray:
+    def get_normal_at(self, x: float, y: float, env_idx: int | None = None) -> np.ndarray:
         """
         Get terrain surface normal at world position (x, y).
 
@@ -4235,6 +4238,8 @@ class RigidEntity(KinematicEntity):
             World x position.
         y : float
             World y position.
+        env_idx : int, optional
+            Environment index for batched scenes. Required when ``n_envs > 0``.
 
         Returns
         -------
@@ -4247,9 +4252,10 @@ class RigidEntity(KinematicEntity):
         hf = self.terrain_hf
         h_scale, v_scale = self.terrain_scale
 
-        # Transform world position to terrain local frame
-        terrain_pos = tensor_to_array(self.links[0].get_pos())
-        terrain_quat = tensor_to_array(self.links[0].get_quat())
+        # Transform world position to terrain local frame.
+        # .reshape((3,/4,)) handles both non-batched (3,) and batched (1,3) returns.
+        terrain_pos = tensor_to_array(self.links[0].get_pos(env_idx).reshape((3,)))
+        terrain_quat = tensor_to_array(self.links[0].get_quat(env_idx).reshape((4,)))
         local_pos = gu.inv_transform_by_trans_quat(np.array([x, y, 0.0]), terrain_pos, terrain_quat)
 
         x_idx = local_pos[0] / h_scale

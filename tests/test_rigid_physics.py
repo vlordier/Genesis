@@ -5953,10 +5953,9 @@ def test_terrain_get_height_non_symmetric(tol):
 
     assert abs(h - expected_h) < 1e-5, f"Axis swap detected: got {h:.6f}, expected {expected_h:.6f}"
 
-    # Sanity check: if axes were swapped, the result would be significantly different
-    h_swapped_x, h_swapped_y = hf[y0, x0], hf[y0, x0]  # noqa: intentional wrong access
+    # Sanity check: the chosen point must be sensitive to axis swaps
     assert abs(hf[x0, y0] - hf[y0, x0]) > 0.5, (
-        "Test not sensitive enough: choose a point where swapped access differs significantly."
+        "Test not sensitive enough: the chosen point must produce different heights under x/y swap."
     )
 
 
@@ -6004,14 +6003,15 @@ def test_terrain_get_height_out_of_bounds(tol):
     hf = np.full((n_rows, n_cols), 10.0, dtype=np.float32)
     scene, terrain = _build_terrain_scene(hf, h_scale, v_scale, pos=(0.0, 0.0, pos_z))
 
-    terrain_x_max = (n_rows - 1) * h_scale  # last valid x is (n_rows-2)*h_scale for bilinear
+    # OOB fires when x0+1 >= n_rows, i.e. x >= (n_rows-1)*h_scale
+    terrain_x_max = (n_rows - 1) * h_scale
 
     oob_cases = [
-        (-0.01, 0.5),                          # x too small
-        (0.5, -0.01),                          # y too small
-        (terrain_x_max + 0.01, 0.5),           # x just beyond last node
-        (0.5, terrain_x_max + 0.01),           # y just beyond last node
-        (terrain_x_max - 0.01, 0.5),           # edge-strip: x0 valid but x1 out
+        (-0.01, 0.5),                          # x negative
+        (0.5, -0.01),                          # y negative
+        (terrain_x_max, 0.5),                  # x at exact boundary (x0=n_rows-1, x1=n_rows)
+        (terrain_x_max + 0.01, 0.5),           # x just beyond boundary
+        (0.5, terrain_x_max + 0.01),           # y just beyond boundary
         (100.0, 100.0),                         # far outside
     ]
     for x, y in oob_cases:
