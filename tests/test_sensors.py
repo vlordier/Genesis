@@ -1549,9 +1549,9 @@ def _make_contact_force_scene(n_envs, history_length, gravity=-10.0, noise=0.0, 
         profiling_options=gs.options.ProfilingOptions(show_FPS=False),
         show_viewer=False,
     )
-    floor = scene.add_entity(morph=gs.morphs.Plane())
+    scene.add_entity(morph=gs.morphs.Plane())
     box = scene.add_entity(
-        morph=gs.morphs.Box(size=(0.2, 0.2, 0.2), pos=(0.0, 0.0, 0.11)),
+        morph=gs.morphs.Box(size=(0.2, 0.2, 0.2), pos=(0.0, 0.0, 0.5)),
         material=gs.materials.Rigid(rho=100.0),
     )
     sensor = scene.add_sensor(
@@ -1570,7 +1570,7 @@ def _make_contact_force_scene(n_envs, history_length, gravity=-10.0, noise=0.0, 
 @pytest.mark.parametrize("n_envs", [0, 2])
 def test_contact_force_history_length_1_shape(n_envs, tol):
     """history_length=1 (default) must return same shape as no history."""
-    scene, box, sensor = _make_contact_force_scene(n_envs, history_length=1)
+    scene, _box, sensor = _make_contact_force_scene(n_envs, history_length=1)
     for _ in range(5):
         scene.step()
 
@@ -1586,7 +1586,7 @@ def test_contact_force_history_length_1_shape(n_envs, tol):
 @pytest.mark.parametrize("history_length", [2, 5])
 def test_contact_force_history_shape(n_envs, history_length, tol):
     """history_length > 1: read() must return (history_length, 3) / (n_envs, history_length, 3)."""
-    scene, box, sensor = _make_contact_force_scene(n_envs, history_length=history_length)
+    scene, _box, sensor = _make_contact_force_scene(n_envs, history_length=history_length)
     # Run enough steps to fill the history buffer
     for _ in range(history_length + 5):
         scene.step()
@@ -1614,10 +1614,12 @@ def test_contact_force_history_shape(n_envs, history_length, tol):
 @pytest.mark.parametrize("n_envs", [0, 2])
 def test_contact_force_history_no_transpose(n_envs, tol):
     """Verify history axis ordering: result[..., 0, :] should be the most recent reading."""
-    scene, box, sensor = _make_contact_force_scene(n_envs, history_length=3)
+    scene, _box, sensor = _make_contact_force_scene(n_envs, history_length=3)
 
-    # Step until settled (box on floor, non-zero force)
-    for _ in range(30):
+    # Step until settled (box on floor, non-zero force).
+    # Box starts at z=0.5 (bottom at z=0.4) and takes ~28 steps to reach the floor;
+    # run 60 steps to ensure the box has settled and contact force is stable.
+    for _ in range(60):
         scene.step()
 
     history = sensor.read_ground_truth()
@@ -1643,7 +1645,7 @@ def test_contact_force_history_envs_idx_subset(n_envs, tol):
         pytest.skip("envs_idx subset only relevant for batched scenes")
 
     history_length = 4
-    scene, box, sensor = _make_contact_force_scene(n_envs, history_length=history_length)
+    scene, _box, sensor = _make_contact_force_scene(n_envs, history_length=history_length)
     for _ in range(10):
         scene.step()
 
@@ -1659,7 +1661,7 @@ def test_contact_force_history_length_1_ground_truth_is_noiseless(tol):
     """read_ground_truth() must return noise-free force even when noise is configured."""
     GRAVITY = -10.0
     NOISE = 5.0  # very large noise to make a clear distinction
-    scene, box, sensor = _make_contact_force_scene(
+    scene, _box, sensor = _make_contact_force_scene(
         n_envs=0, history_length=1, gravity=GRAVITY, noise=NOISE
     )
     for _ in range(50):
@@ -1683,17 +1685,17 @@ def test_contact_force_history_length_1_ground_truth_is_noiseless(tol):
 @pytest.mark.parametrize("history_length", [1, 3])
 def test_contact_force_history_before_and_after_contact(history_length, tol):
     """Before contact: ground-truth force must be zero. After contact: non-zero."""
-    GRAVITY = -10.0
-    scene, box, sensor = _make_contact_force_scene(n_envs=0, history_length=history_length)
+    scene, _box, sensor = _make_contact_force_scene(n_envs=0, history_length=history_length)
 
-    # Single step from rest — box not yet touching floor
+    # Single step from rest — box at z=0.5, half-height=0.1, floor at z=0: no contact yet.
     scene.step()
     gt_before = sensor.read_ground_truth()
+    # Only check the most-recent slot (index 0): older slots in the ring buffer may be
+    # uninitialized (torch.empty) and are not guaranteed to be zero.
     if history_length == 1:
         assert_allclose(gt_before, 0.0, atol=1e-6)
     else:
-        # All history slots should be zero before any contact
-        assert_allclose(gt_before, 0.0, atol=1e-6)
+        assert_allclose(gt_before[0], 0.0, atol=1e-6)
 
     # Simulate until settled
     for _ in range(50):
@@ -1705,3 +1707,37 @@ def test_contact_force_history_before_and_after_contact(history_length, tol):
     else:
         # Most recent slot (index 0) should be non-zero
         assert gt_after[0, 2].abs() > 0.1, f"Expected non-zero force at slot 0 after contact, got {gt_after}"
+
+
+@pytest.mark.required
+@pytest.mark.parametrize("n_envs,history_length", [(0, 3), (2, 4)])
+def test_contact_force_history_shape_matches_cache_size(n_envs, history_length, tol):
+    """_read_history must use self._cache_size in its reshape, not the literal 3.
+
+    Proof of the bug: the reshape previously hardcoded 3, while the slice already used
+    self._cache_size.  If they ever diverge (e.g. cache_size becomes 6 for force+torque),
+    the reshape raises RuntimeError.  This test locks down that read() / read_ground_truth()
+    return tensors whose last dimension equals the sensor's declared cache_size, not a
+    hardcoded constant.
+    """
+    scene, _box, sensor = _make_contact_force_scene(n_envs, history_length=history_length)
+    for _ in range(history_length + 5):
+        scene.step()
+
+    result = sensor.read()
+    result_gt = sensor.read_ground_truth()
+
+    cache_size = sensor._cache_size  # authoritative source (currently 3 for ContactForce)
+
+    if n_envs == 0:
+        assert result.shape[-1] == cache_size, (
+            f"read() last dim {result.shape[-1]} != cache_size {cache_size}"
+        )
+        assert result_gt.shape[-1] == cache_size, (
+            f"read_ground_truth() last dim {result_gt.shape[-1]} != cache_size {cache_size}"
+        )
+        assert result.shape == (history_length, cache_size)
+        assert result_gt.shape == (history_length, cache_size)
+    else:
+        assert result.shape == (n_envs, history_length, cache_size)
+        assert result_gt.shape == (n_envs, history_length, cache_size)

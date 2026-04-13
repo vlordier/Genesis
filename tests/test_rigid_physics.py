@@ -5899,14 +5899,14 @@ def terrain_scales(request):
 # ---- correctness tests ------------------------------------------------------------------
 
 @pytest.mark.required
-def test_terrain_get_height_flat(show_viewer):
+def test_terrain_get_height_flat():
     """Flat terrain: get_height_at returns a constant height (terrain z-offset) everywhere."""
     n_rows, n_cols = 16, 16
     h_scale, v_scale = 0.25, 0.1
     pos_z = 1.5
     hf = np.ones((n_rows, n_cols), dtype=np.float32) * 5.0  # constant raw height
 
-    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale, pos=(0.0, 0.0, pos_z))
+    _scene, terrain = _build_terrain_scene(hf, h_scale, v_scale, pos=(0.0, 0.0, pos_z))
 
     expected_height = 5.0 * v_scale + pos_z
     # Sample a grid of interior points
@@ -5939,7 +5939,7 @@ def test_terrain_get_height_ramp_x(terrain_shape, terrain_scales, tol):
     slope = 2.0  # raw units per row
 
     hf = _make_ramp_hf(n_rows, n_cols, slope_x=slope, slope_y=0.0)
-    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
+    _scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
 
     # Sample interior points (avoid last row/col where x1/y1 would be out of bounds)
     x_vals = np.linspace(h_scale * 0.5, (n_rows - 2) * h_scale - 0.01, 6)
@@ -5977,7 +5977,7 @@ def test_terrain_get_height_non_symmetric(tol):
     slope_x, slope_y = 3.0, 7.0  # very different slopes
 
     hf = _make_ramp_hf(n_rows, n_cols, slope_x=slope_x, slope_y=slope_y)
-    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
+    _scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
 
     # Interior test point
     x, y = 1.0, 2.0  # well inside both axes
@@ -6020,7 +6020,7 @@ def test_terrain_get_height_triangle_consistency(tol):
     # Arbitrary non-flat height field
     rng = np.random.default_rng(42)
     hf = rng.uniform(0.0, 5.0, (n_rows, n_cols)).astype(np.float32)
-    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
+    _scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
 
     # Query at the diagonal of each interior cell: tx == ty == 0.5
     for i in range(n_rows - 2):
@@ -6049,17 +6049,17 @@ def test_terrain_get_height_out_of_bounds(tol):
 
     # Non-zero height field so edge height would differ from pos_z
     hf = np.full((n_rows, n_cols), 10.0, dtype=np.float32)
-    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale, pos=(0.0, 0.0, pos_z))
+    _scene, terrain = _build_terrain_scene(hf, h_scale, v_scale, pos=(0.0, 0.0, pos_z))
 
-    # OOB fires when x0+1 >= n_rows, i.e. x >= (n_rows-1)*h_scale
-    terrain_x_max = (n_rows - 1) * h_scale
+    # OOB fires when x0+1 >= n_rows (or y0+1 >= n_cols), i.e. coord >= (n-1)*h_scale
+    terrain_max = (n_rows - 1) * h_scale  # symmetric: n_rows == n_cols
 
     oob_cases = [
         (-0.01, 0.5),                          # x negative
         (0.5, -0.01),                          # y negative
-        (terrain_x_max, 0.5),                  # x at exact boundary (x0=n_rows-1, x1=n_rows)
-        (terrain_x_max + 0.01, 0.5),           # x just beyond boundary
-        (0.5, terrain_x_max + 0.01),           # y just beyond boundary
+        (terrain_max, 0.5),                    # x at exact boundary (x0=n_rows-1, x1=n_rows)
+        (terrain_max + 0.01, 0.5),             # x just beyond boundary
+        (0.5, terrain_max + 0.01),             # y just beyond boundary (uses same max: n_rows==n_cols)
         (100.0, 100.0),                         # far outside
     ]
     for x, y in oob_cases:
@@ -6086,15 +6086,13 @@ def test_terrain_get_height_pose_transform(pos, euler, tol):
     Querying the world position of a known terrain vertex must return the
     exact height stored in the height field.
     """
-    import genesis.utils.geom as gu
-
     n_rows, n_cols = 12, 12
     h_scale, v_scale = 0.5, 0.3
 
     rng = np.random.default_rng(7)
     hf = rng.uniform(0.0, 3.0, (n_rows, n_cols)).astype(np.float32)
 
-    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale, pos=pos, euler=euler)
+    _scene, terrain = _build_terrain_scene(hf, h_scale, v_scale, pos=pos, euler=euler)
 
     terrain_pos = np.array(terrain.links[0].get_pos().cpu().numpy())
     terrain_quat = np.array(terrain.links[0].get_quat().cpu().numpy())
@@ -6121,7 +6119,7 @@ def test_terrain_get_normal_unit_length_and_direction(tol):
 
     rng = np.random.default_rng(0)
     hf = rng.uniform(0.0, 4.0, (n_rows, n_cols)).astype(np.float32)
-    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
+    _scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
 
     xs = np.linspace(h_scale * 0.5, (n_rows - 2) * h_scale - 0.01, 8)
     ys = np.linspace(h_scale * 0.5, (n_cols - 2) * h_scale - 0.01, 8)
@@ -6156,7 +6154,7 @@ def test_terrain_triangle_selection_both_halves(cell_i, cell_j, tol):
     hf[cell_i,     cell_j + 1] = h01
     hf[cell_i + 1, cell_j + 1] = h11
 
-    scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
+    _scene, terrain = _build_terrain_scene(hf, h_scale, v_scale)
 
     # Upper-left triangle: tx=0.2, ty=0.7 (ty > tx)
     tx_ul, ty_ul = 0.2, 0.7
@@ -6184,3 +6182,97 @@ def test_terrain_triangle_selection_both_halves(cell_i, cell_j, tol):
     assert not np.allclose(n_ul, n_lr, atol=1e-3), (
         "Normals for upper-left and lower-right triangle should differ for this height field"
     )
+
+
+@pytest.mark.required
+def test_terrain_get_height_returns_python_float(tol):
+    """get_height_at must return a Python float, not a numpy scalar.
+
+    np.float32 is never a subclass of float. np.float64 stopped inheriting
+    from float in NumPy 2.0 (released June 2024). Since Genesis allows
+    numpy>=1.26.4 (which includes 2.x), this contract must be enforced
+    explicitly via float() at the return site — not left to NumPy.
+    """
+    # Proof that numpy scalars are NOT Python floats (at least for float32):
+    assert not isinstance(np.float32(1.0), float), (
+        "Sanity check failed: np.float32 should not be a Python float"
+    )
+
+    n_rows, n_cols = 6, 6
+    h_scale, v_scale = 0.25, 0.1
+    # Constant height field so height is deterministic
+    hf = np.full((n_rows, n_cols), 2.0, dtype=np.float32)
+    _, terrain = _build_terrain_scene(hf, h_scale, v_scale, pos=(0.0, 0.0, 1.0))
+
+    # Interior point — exercises the normal interpolation return path
+    h_interior = terrain.get_height_at(0.5, 0.5)
+    assert type(h_interior) is float, (
+        f"get_height_at returned {type(h_interior).__name__}, expected Python float"
+    )
+
+    # Out-of-bounds point — exercises the OOB early-return path (terrain_pos[2])
+    h_oob = terrain.get_height_at(-1.0, -1.0)
+    assert type(h_oob) is float, (
+        f"get_height_at (OOB path) returned {type(h_oob).__name__}, expected Python float"
+    )
+
+
+@pytest.mark.required
+def test_terrain_batched_requires_env_idx(tol):
+    """get_height_at / get_normal_at must raise for batched scenes when env_idx is omitted."""
+    n_rows, n_cols = 6, 6
+    h_scale, v_scale = 0.25, 0.1
+    hf = np.ones((n_rows, n_cols), dtype=np.float32)
+    scene = gs.Scene(show_viewer=False, show_FPS=False)
+    terrain = scene.add_entity(
+        gs.morphs.Terrain(
+            height_field=hf,
+            horizontal_scale=h_scale,
+            vertical_scale=v_scale,
+        )
+    )
+    scene.build(n_envs=2)
+
+    # Without env_idx in a batched scene → should raise
+    with pytest.raises(Exception, match="env_idx"):
+        terrain.get_height_at(0.5, 0.5)
+
+    with pytest.raises(Exception, match="env_idx"):
+        terrain.get_normal_at(0.5, 0.5)
+
+    # With explicit env_idx → must not raise and return a valid float / unit vector
+    h = terrain.get_height_at(0.5, 0.5, env_idx=0)
+    assert isinstance(h, float)
+    n = terrain.get_normal_at(0.5, 0.5, env_idx=0)
+    assert abs(np.linalg.norm(n) - 1.0) < 1e-6
+
+
+@pytest.mark.required
+def test_terrain_yaw_only_rotation_is_exact():
+    """Pure yaw (z-axis) rotation is handled exactly; pitch/roll is a known limitation.
+
+    The world→local inverse transform uses z=0 as a placeholder.  For yaw rotations
+    this is exact because Rz does not mix z into local x/y.  This test proves the yaw
+    case is correct by querying a known vertex and checking the returned height.
+    """
+    n_rows, n_cols = 8, 8
+    h_scale, v_scale = 0.5, 0.2
+    rng = np.random.default_rng(99)
+    hf = rng.uniform(0.0, 3.0, (n_rows, n_cols)).astype(np.float32)
+
+    # 90-degree yaw: local (i*hs, j*hs) → world (-j*hs, i*hs) + translation
+    euler_yaw90 = (0.0, 0.0, 90.0)
+    pos = (1.0, 2.0, 0.5)
+    _scene, terrain = _build_terrain_scene(hf, h_scale, v_scale, pos=pos, euler=euler_yaw90)
+
+    terrain_pos = np.array(terrain.links[0].get_pos().cpu().numpy())
+    terrain_quat = np.array(terrain.links[0].get_quat().cpu().numpy())
+
+    for (i, j) in [(1, 1), (2, 4), (n_rows - 3, n_cols - 3)]:
+        local_pt = np.array([i * h_scale, j * h_scale, hf[i, j] * v_scale])
+        world_pt = gu.transform_by_trans_quat(local_pt, terrain_pos, terrain_quat)
+        h_queried = terrain.get_height_at(float(world_pt[0]), float(world_pt[1]))
+        expected_h = float(world_pt[2])
+        assert abs(h_queried - expected_h) < 2e-4, (
+            f"Yaw-90 vertex ({i},{j}): got {h_queried:.6f}, expected {expected_h:.6f}"
+        )

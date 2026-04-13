@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Type
+from typing import TYPE_CHECKING
 
 import quadrants as qd
 import numpy as np
@@ -183,52 +183,72 @@ class ContactForceSensor(
     def __init__(self, options: ContactForceSensorOptions, sensor_idx: int, sensor_manager: "SensorManager"):
         super().__init__(options, sensor_idx, sensor_manager)
 
-        self.debug_object: "Mesh" | None = None
+        self.debug_object: Mesh | None = None
 
-    @gs.assert_built
-    def read(self, envs_idx=None) -> torch.Tensor:
+    def _read_history(self, envs_idx: torch.Tensor) -> torch.Tensor:
         """
-        Read the sensor data (with noise applied if applicable).
+        Read ``history_length`` steps from the ground-truth ring buffer.
 
-        When ``history_length == 1`` (default), returns the current processed force reading
-        with noise/delay/clipping applied, shaped ``(3,)`` for non-batched or
-        ``(n_envs, 3)`` for batched scenes.
+        Returns shape ``(history_length, cache_size)`` (non-batched) or
+        ``(n_envs, history_length, cache_size)`` (batched), index 0 = most recent.
 
-        When ``history_length > 1``, returns a history buffer of shape
-        ``(history_length, 3)`` (non-batched) or ``(n_envs, history_length, 3)`` (batched),
-        where index 0 is the most recent step. Note: the history buffer stores
-        ground-truth values (before noise/delay) since the underlying ring buffer is used
-        for the delay mechanism and is written before post-processing.
+        .. note::
+            The ring buffer stores ground-truth values written *before* noise/delay/clipping
+            are applied, because it is also the mechanism used to implement read delay.
+            Consequently this method always returns ground-truth data regardless of the
+            configured noise or delay — the same limitation applies to both :meth:`read`
+            and :meth:`read_ground_truth` when ``history_length > 1``.
+
+        .. warning::
+            History slots that have not yet been written (i.e. when fewer simulation steps
+            have elapsed than ``history_length``) contain uninitialised memory from
+            ``torch.empty``.  Only slot index 0 (the most-recent step) is guaranteed to
+            be valid after the very first :meth:`~SensorManager.step` call.
         """
-        envs_idx = self._sanitize_envs_idx(envs_idx)
-        history_length = self._options.history_length
-
-        if history_length == 1:
-            return self._get_formatted_data(self._manager.get_cloned_from_cache(self), envs_idx)
-
         buffered_data = self._manager._buffered_data[gs.tc_float]
-        cache_slice = slice(self._cache_idx, self._cache_idx + 3)
+        cache_slice = slice(self._cache_idx, self._cache_idx + self._cache_size)
         n_envs = self._manager._sim.n_envs
         n_query_envs = len(envs_idx)
+        history_length = self._options.history_length
 
         history_data = []
         for i in range(history_length):
             hist = buffered_data.at(i, envs_idx, cache_slice)
-            if n_envs == 0:
-                hist = hist.reshape(3)
-            else:
-                hist = hist.reshape(n_query_envs, 3)
+            hist = hist.reshape(self._cache_size) if n_envs == 0 else hist.reshape(n_query_envs, self._cache_size)
             history_data.append(hist)
 
-        # Non-batched: stack along dim=0 → (history_length, 3)
-        # Batched: stack along dim=1 → (n_envs, history_length, 3)
+        # Non-batched: stack along dim=0 → (history_length, cache_size)
+        # Batched: stack along dim=1 → (n_envs, history_length, cache_size)
         stack_dim = 0 if n_envs == 0 else 1
         return torch.stack(history_data, dim=stack_dim)
 
     @gs.assert_built
+    def read(self, envs_idx=None) -> torch.Tensor:
+        """
+        Read the sensor data (with noise/delay/clipping applied when applicable).
+
+        When ``history_length == 1`` (default), returns the current processed force reading
+        shaped ``(3,)`` (non-batched) or ``(n_envs, 3)`` (batched).
+
+        When ``history_length > 1``, returns a ground-truth history buffer of shape
+        ``(history_length, 3)`` (non-batched) or ``(n_envs, history_length, 3)`` (batched),
+        where index 0 is the most recent step.
+
+        .. note::
+            For ``history_length > 1`` the returned values are always ground-truth
+            (no noise, delay, or clipping) because the underlying ring buffer that stores
+            history is written before post-processing. Use ``history_length == 1`` if you
+            need noise or delay to be reflected in the reading.
+        """
+        envs_idx = self._sanitize_envs_idx(envs_idx)
+        if self._options.history_length == 1:
+            return self._get_formatted_data(self._manager.get_cloned_from_cache(self), envs_idx)
+        return self._read_history(envs_idx)
+
+    @gs.assert_built
     def read_ground_truth(self, envs_idx=None) -> torch.Tensor:
         """
-        Read the ground truth sensor data (without noise/delay/clipping).
+        Read the ground-truth sensor data (without noise/delay/clipping).
 
         When ``history_length == 1`` (default), returns the current ground-truth force
         shaped ``(3,)`` (non-batched) or ``(n_envs, 3)`` (batched).
@@ -238,36 +258,13 @@ class ContactForceSensor(
         where index 0 is the most recent step.
         """
         envs_idx = self._sanitize_envs_idx(envs_idx)
-        history_length = self._options.history_length
-        cache_slice = slice(self._cache_idx, self._cache_idx + 3)
-
-        if history_length == 1:
+        if self._options.history_length == 1:
             gt_cache = self._manager.get_cloned_from_cache(self, is_ground_truth=True)
             return self._get_formatted_data(gt_cache, envs_idx)
-
-        buffered_data = self._manager._buffered_data[gs.tc_float]
-        n_envs = self._manager._sim.n_envs
-        n_query_envs = len(envs_idx)
-
-        history_data = []
-        for i in range(history_length):
-            hist = buffered_data.at(i, envs_idx, cache_slice)
-            if n_envs == 0:
-                hist = hist.reshape(3)
-            else:
-                hist = hist.reshape(n_query_envs, 3)
-            history_data.append(hist)
-
-        # Non-batched: stack along dim=0 → (history_length, 3)
-        # Batched: stack along dim=1 → (n_envs, history_length, 3)
-        stack_dim = 0 if n_envs == 0 else 1
-        return torch.stack(history_data, dim=stack_dim)
+        return self._read_history(envs_idx)
 
     def build(self):
-        super().build()
-
-        if self._shared_metadata.solver is None:
-            self._shared_metadata.solver = self._manager._sim.rigid_solver
+        super().build()  # RigidSensorMixin.build() already assigns self._shared_metadata.solver
 
         self._shared_metadata.min_force = concat_with_tensor(
             self._shared_metadata.min_force, self._options.min_force, expand=(1, 3)

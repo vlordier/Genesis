@@ -4154,6 +4154,61 @@ class RigidEntity(KinematicEntity):
             mass += link.get_mass()
         return mass
 
+    def _resolve_terrain_cell(
+        self, x: float, y: float, env_idx: int | None, caller: str
+    ):
+        """
+        Shared setup for terrain queries.
+
+        Validates that the entity has a terrain height field and that ``env_idx`` is
+        provided for batched scenes, then transforms the world position ``(x, y)`` into
+        grid-cell coordinates.
+
+        Returns
+        -------
+        tuple
+            ``(h_scale, v_scale, terrain_pos, terrain_quat, tx, ty, h00, h10, h01, h11, oob)``
+
+            ``oob`` is ``True`` when the query point lies outside the valid grid extent;
+            callers must handle that case before using the height-corner values.
+        """
+        if not hasattr(self, "terrain_hf"):
+            gs.raise_exception("This entity does not have a terrain height field.")
+
+        if self._solver.n_envs > 0 and env_idx is None:
+            gs.raise_exception(
+                f"{caller}() requires an explicit `env_idx` for batched scenes (n_envs > 0)."
+            )
+
+        hf = self.terrain_hf
+        h_scale, v_scale = self.terrain_scale
+
+        # .reshape handles both non-batched (3,) and batched env_idx=int → (1,3) returns.
+        terrain_pos = tensor_to_array(self.links[0].get_pos(env_idx).reshape((3,)))
+        terrain_quat = tensor_to_array(self.links[0].get_quat(env_idx).reshape((4,)))
+        local_pos = gu.inv_transform_by_trans_quat(np.array([x, y, 0.0]), terrain_pos, terrain_quat)
+
+        x_idx = local_pos[0] / h_scale
+        y_idx = local_pos[1] / h_scale
+
+        x0 = int(np.floor(x_idx))
+        y0 = int(np.floor(y_idx))
+        x1 = x0 + 1
+        y1 = y0 + 1
+
+        # hf is indexed as [row, col] where row=x, col=y.
+        oob = x0 < 0 or y0 < 0 or x1 >= hf.shape[0] or y1 >= hf.shape[1]
+
+        tx = x_idx - x0
+        ty = y_idx - y0
+
+        h00 = hf[x0, y0] if not oob else 0.0
+        h10 = hf[x1, y0] if not oob else 0.0
+        h01 = hf[x0, y1] if not oob else 0.0
+        h11 = hf[x1, y1] if not oob else 0.0
+
+        return h_scale, v_scale, terrain_pos, terrain_quat, tx, ty, h00, h10, h01, h11, oob
+
     @gs.assert_built
     def get_height_at(self, x: float, y: float, env_idx: int | None = None) -> float:
         """
@@ -4178,39 +4233,19 @@ class RigidEntity(KinematicEntity):
         height : float
             Interpolated height at (x, y), or the terrain base z-offset when the position
             is outside the terrain extent.
+
+        .. note::
+            The world→local coordinate transform uses ``z=0`` as a placeholder for the
+            unknown query height.  For terrains with only a yaw (z-axis) rotation this is
+            exact because yaw does not mix z into the local x/y coordinates.  Terrains
+            with non-trivial pitch or roll will give incorrect results.
         """
-        if not hasattr(self, "terrain_hf"):
-            gs.raise_exception("This entity does not have a terrain height field.")
+        _, v_scale, terrain_pos, _, tx, ty, h00, h10, h01, h11, oob = (
+            self._resolve_terrain_cell(x, y, env_idx, "get_height_at")
+        )
 
-        hf = self.terrain_hf
-        h_scale, v_scale = self.terrain_scale
-
-        # Transform world position to terrain local frame.
-        # .reshape((3,)) handles both non-batched (3,) and batched (1,3) returns.
-        terrain_pos = tensor_to_array(self.links[0].get_pos(env_idx).reshape((3,)))
-        terrain_quat = tensor_to_array(self.links[0].get_quat(env_idx).reshape((4,)))
-        local_pos = gu.inv_transform_by_trans_quat(np.array([x, y, 0.0]), terrain_pos, terrain_quat)
-
-        x_idx = local_pos[0] / h_scale
-        y_idx = local_pos[1] / h_scale
-
-        x0 = int(np.floor(x_idx))
-        y0 = int(np.floor(y_idx))
-        x1 = x0 + 1
-        y1 = y0 + 1
-
-        # hf is indexed as [row, col] where row corresponds to x and col to y.
-        # Return terrain base height for any position outside the valid grid extent.
-        if x0 < 0 or y0 < 0 or x1 >= hf.shape[0] or y1 >= hf.shape[1]:
-            return terrain_pos[2]
-
-        tx = x_idx - x0
-        ty = y_idx - y0
-
-        h00 = hf[x0, y0]
-        h10 = hf[x1, y0]
-        h01 = hf[x0, y1]
-        h11 = hf[x1, y1]
+        if oob:
+            return float(terrain_pos[2])
 
         # Triangle-based interpolation matching the terrain mesh diagonal convention.
         # Each cell is split along the (x0,y0)-(x1,y1) diagonal:
@@ -4221,7 +4256,7 @@ class RigidEntity(KinematicEntity):
         else:
             h = h00 + (h10 - h00) * tx + (h11 - h10) * ty
 
-        return h * v_scale + terrain_pos[2]
+        return float(h * v_scale + terrain_pos[2])
 
     @gs.assert_built
     def get_normal_at(self, x: float, y: float, env_idx: int | None = None) -> np.ndarray:
@@ -4245,45 +4280,22 @@ class RigidEntity(KinematicEntity):
         -------
         normal : np.ndarray
             Unit normal vector of shape (3,) in world frame.
+
+        .. note::
+            Same coordinate-transform limitation as :meth:`get_height_at`: only yaw
+            (z-axis) terrain rotations are handled correctly.  Pitch or roll will give
+            incorrect results.
         """
-        if not hasattr(self, "terrain_hf"):
-            gs.raise_exception("This entity does not have a terrain height field.")
+        h_scale, v_scale, _, terrain_quat, tx, ty, h00, h10, h01, h11, oob = (
+            self._resolve_terrain_cell(x, y, env_idx, "get_normal_at")
+        )
 
-        hf = self.terrain_hf
-        h_scale, v_scale = self.terrain_scale
-
-        # Transform world position to terrain local frame.
-        # .reshape((3,/4,)) handles both non-batched (3,) and batched (1,3) returns.
-        terrain_pos = tensor_to_array(self.links[0].get_pos(env_idx).reshape((3,)))
-        terrain_quat = tensor_to_array(self.links[0].get_quat(env_idx).reshape((4,)))
-        local_pos = gu.inv_transform_by_trans_quat(np.array([x, y, 0.0]), terrain_pos, terrain_quat)
-
-        x_idx = local_pos[0] / h_scale
-        y_idx = local_pos[1] / h_scale
-
-        x0 = int(np.floor(x_idx))
-        y0 = int(np.floor(y_idx))
-        x1 = x0 + 1
-        y1 = y0 + 1
-
-        # hf is indexed as [row, col] where row corresponds to x and col to y
-        if x0 < 0 or y0 < 0 or x1 >= hf.shape[0] or y1 >= hf.shape[1]:
-            normal_local = np.array([0.0, 0.0, 1.0])
-            return gu.transform_by_quat(normal_local, terrain_quat)
-
-        tx = x_idx - x0
-        ty = y_idx - y0
-
-        h00 = hf[x0, y0]
-        h10 = hf[x1, y0]
-        h01 = hf[x0, y1]
-        h11 = hf[x1, y1]
+        if oob:
+            return gu.transform_by_quat(np.array([0.0, 0.0, 1.0]), terrain_quat)
 
         # Face normal from the triangle containing the query point (matches mesh diagonal).
-        # Upper-left triangle (tx <= ty): slope from (0,0)-(1,1) edge, (0,1) vertex
-        #   n = (-(h11-h01)*v_scale/h_scale, -(h01-h00)*v_scale/h_scale, 1)
-        # Lower-right triangle (tx > ty): slope from (0,0)-(1,0)-(1,1) path
-        #   n = (-(h10-h00)*v_scale/h_scale, -(h11-h10)*v_scale/h_scale, 1)
+        # Upper-left triangle (tx <= ty): corners (x0,y0), (x1,y1), (x0,y1)
+        # Lower-right triangle (tx > ty): corners (x0,y0), (x1,y0), (x1,y1)
         if tx <= ty:
             dz_dx = (h11 - h01) * v_scale / h_scale
             dz_dy = (h01 - h00) * v_scale / h_scale
@@ -4298,7 +4310,6 @@ class RigidEntity(KinematicEntity):
         else:
             normal_local = np.array([0.0, 0.0, 1.0])
 
-        # Transform normal from terrain local frame to world frame
         return gu.transform_by_quat(normal_local, terrain_quat)
 
     # ------------------------------------------------------------------------------------

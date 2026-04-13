@@ -185,7 +185,10 @@ class ContactForce(RigidSensorOptionsMixin["ContactForceSensor"], NoisySensorOpt
         The maximum output absolute force per each axis. Values above this will be clipped. Default is infinity.
     history_length : int, optional
         The number of historical force readings to store and return. Default is 1 (current value only).
-        When > 1, the sensor returns a history buffer of shape (history_length, 3) per environment.
+        When > 1, :meth:`~ContactForceSensor.read` and :meth:`~ContactForceSensor.read_ground_truth`
+        return a ground-truth history buffer shaped ``(history_length, 3)`` (non-batched) or
+        ``(n_envs, history_length, 3)`` (batched), where index 0 is the most recent step.
+        Slots older than the number of elapsed simulation steps contain uninitialised data.
     debug_color : array-like[float, float, float, float], optional
         The rgba color of the debug arrow. Defaults to (1.0, 0.0, 1.0, 0.5).
     debug_scale : float, optional
