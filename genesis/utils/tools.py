@@ -13,33 +13,89 @@ def animate(imgs, filename=None, fps=60):
     """
     Create a video from a list of images.
 
+    Images must be uint8 arrays of shape ``(H, W, 3)`` (RGB), ``(H, W, 4)`` (RGBA,
+    alpha stripped automatically), or ``(H, W)`` (grayscale). PIL Images are also
+    accepted. Float arrays are *not* supported; convert to uint8 before calling.
+
     Args:
-        imgs (list): List of input images.
-        filename (str, optional): Name of the output video file. If not provided, the name will be default to the name of the caller file, with a timestamp and '.mp4' extension.
+        imgs (list): List of input images (numpy arrays or PIL Images).
+        filename (str, optional): Output video path (.mp4). Defaults to
+            ``<caller_script>_<timestamp>.mp4`` in the current directory.
+        fps (int, optional): Frames per second. Defaults to 60.
     """
     assert isinstance(imgs, list)
     if len(imgs) == 0:
         gs.logger.warning("No image to save.")
         return
 
+    fps = max(1, int(round(fps)))  # PyAV requires an integer time-base denominator
+
     if filename is None:
         caller_file = inspect.stack()[-1].filename
         # caller file + timestamp + .mp4
         filename = os.path.splitext(os.path.basename(caller_file))[0] + f"_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
-    os.makedirs(os.path.abspath(os.path.dirname(filename)), exist_ok=True)
+    os.makedirs(os.path.abspath(os.path.dirname(filename) or "."), exist_ok=True)
 
     gs.logger.info(f'Saving video to ~<"{filename}">~...')
-    from moviepy import ImageSequenceClip
 
-    imgs = ImageSequenceClip(imgs, fps=fps)
-    imgs.write_videofile(
-        filename,
-        fps=fps,
-        logger=None,
-        codec="libx264",
-        preset="ultrafast",
-        # ffmpeg_params=["-crf", "0"],
-    )
+    _av_ok = False
+    try:
+        import av
+
+        # libx264 must be compiled into this PyAV build; fall back to moviepy otherwise.
+        if "libx264" not in av.codecs_available:
+            raise ImportError("PyAV build does not include libx264")
+
+        first = imgs[0]
+        if not isinstance(first, np.ndarray):
+            first = np.array(first)
+        # Strip alpha channel if present; libx264/yuv420p only accepts RGB or grayscale.
+        if first.ndim == 3 and first.shape[2] == 4:
+            first = first[..., :3]
+        height, width = first.shape[:2]
+        is_color = first.ndim == 3 and first.shape[2] == 3
+        fmt = "rgb24" if is_color else "gray"
+
+        container = av.open(filename, mode="w")
+        try:
+            stream = container.add_stream("libx264", rate=fps)
+            stream.width = width
+            stream.height = height
+            stream.pix_fmt = "yuv420p"
+            stream.codec_context.options = {"preset": "ultrafast"}
+
+            for img in imgs:
+                if not isinstance(img, np.ndarray):
+                    img = np.array(img)
+                img = img.astype(np.uint8)
+                # Strip alpha channel for consistency with `first`.
+                if img.ndim == 3 and img.shape[2] == 4:
+                    img = img[..., :3]
+                # from_ndarray handles stride/padding internally, avoiding the
+                # line_size // channels reshape bug for non-aligned widths.
+                frame = av.VideoFrame.from_ndarray(img, format=fmt)
+                for packet in stream.encode(frame):
+                    container.mux(packet)
+
+            for packet in stream.encode(None):
+                container.mux(packet)
+        finally:
+            container.close()
+
+        _av_ok = True
+
+    except ImportError as exc:
+        gs.logger.warning(
+            f"PyAV unavailable ({exc}); falling back to moviepy. "
+            "Note: moviepy ≥ 2.x may drop the last frame. Install 'av' for reliable output."
+        )
+
+    if not _av_ok:
+        from moviepy import ImageSequenceClip
+
+        clip = ImageSequenceClip(imgs, fps=fps)
+        clip.write_videofile(filename, fps=fps, logger=None, codec="libx264", preset="ultrafast")
+
     gs.logger.info("Video saved.")
 
 
