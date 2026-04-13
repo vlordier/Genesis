@@ -2932,6 +2932,51 @@ def test_jacobian(gs_sim, tol):
 
 
 @pytest.mark.required
+def test_jacobian_compound_joints(tol):
+    """
+    Regression test for issue #1608: compound joints (multiple revolute joints on the same
+    body) produced wrong Jacobian columns because `dof_offset` was erroneously added to
+    `joints_info.dof_start`, which already encodes the global DOF position.
+
+    Before the fix, j_y (col 1) wrote to column 2 (1 + dof_offset=1 = 2) and j_z (col 2)
+    also wrote to column 2, making columns 1 and 2 identical. The test checks against the
+    known analytical Jacobian at q=[0,0,0] for a 3-DOF arm where seg1 has two compound
+    revolute joints (j_x, j_y) and seg2 has one (j_z).
+    """
+    scene = gs.Scene(show_viewer=False)
+    robot = scene.add_entity(
+        gs.morphs.MJCF(file="xml/compound_joint.xml", requires_jac_and_IK=True),
+    )
+    scene.build()
+
+    # Zero configuration: seg2 origin is at (0, 0, 0.4) in world frame.
+    # Analytical Jacobian:
+    #   j_x (col 0): rot=[1,0,0], r=[0,0,0.4] → J_pos = r×ω = [0,-0.4,0], J_rot=[1,0,0]
+    #   j_y (col 1): rot=[0,1,0], r=[0,0,0.4] → J_pos = r×ω = [0.4,0,0],  J_rot=[0,1,0]
+    #   j_z (col 2): at seg2 origin; r=[0,0,0] → J_pos = [0,0,0],           J_rot=[0,0,1]
+    qpos = np.zeros(robot.n_dofs, dtype=gs.np_float)
+    robot.set_qpos(qpos, zero_velocity=True)
+    scene.step()
+
+    end_link = robot.get_link("seg2")
+    J = tensor_to_array(robot.get_jacobian(end_link))  # shape (6, 3)
+
+    L = 0.4  # seg1 length
+    expected = np.array(
+        [
+            [0.0, L, 0.0],   # pos x
+            [-L, 0.0, 0.0],  # pos y
+            [0.0, 0.0, 0.0], # pos z  (j_z at seg2 origin, no translation)
+            [1.0, 0.0, 0.0], # rot x
+            [0.0, 1.0, 0.0], # rot y
+            [0.0, 0.0, 1.0], # rot z
+        ],
+        dtype=gs.np_float,
+    )
+    assert_allclose(J, expected, tol=tol)
+
+
+@pytest.mark.required
 def test_mjcf_parsing_with_include():
     scene = gs.Scene()
     robot1 = scene.add_entity(gs.morphs.MJCF(file="xml/franka_emika_panda/scene.xml"))

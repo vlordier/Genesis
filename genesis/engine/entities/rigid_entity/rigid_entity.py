@@ -2472,7 +2472,6 @@ class RigidEntity(KinematicEntity):
         while i_l > -1:
             I_l = [i_l, i_b] if qd.static(self.solver._options.batch_links_info) else i_l
 
-            dof_offset = 0
             for i_j in range(links_info.joint_start[I_l], links_info.joint_end[I_l]):
                 I_j = [i_j, i_b] if qd.static(self.solver._options.batch_joints_info) else i_j
 
@@ -2482,7 +2481,9 @@ class RigidEntity(KinematicEntity):
                 elif joints_info.type[I_j] == gs.JOINT_TYPE.REVOLUTE:
                     i_d = joints_info.dof_start[I_j]
                     I_d = [i_d, i_b] if qd.static(self.solver._options.batch_dofs_info) else i_d
-                    i_d_jac = i_d + dof_offset - self._dof_start
+                    # joints_info.dof_start is the global scene-level DOF index; subtract entity
+                    # offset to get the entity-local column index into _jacobian.
+                    i_d_jac = i_d - self._dof_start
                     rotation = gu.qd_transform_by_quat(dofs_info.motion_ang[I_d], links_state.quat[i_l, i_b])
                     translation = rotation.cross(tgt_link_pos - links_state.pos[i_l, i_b])
 
@@ -2496,7 +2497,7 @@ class RigidEntity(KinematicEntity):
                 elif joints_info.type[I_j] == gs.JOINT_TYPE.PRISMATIC:
                     i_d = joints_info.dof_start[I_j]
                     I_d = [i_d, i_b] if qd.static(self.solver._options.batch_dofs_info) else i_d
-                    i_d_jac = i_d + dof_offset - self._dof_start
+                    i_d_jac = i_d - self._dof_start
                     translation = gu.qd_transform_by_quat(dofs_info.motion_vel[I_d], links_state.quat[i_l, i_b])
 
                     self._jacobian[0, i_d_jac, i_b] = translation[0] * pos_mask[0]
@@ -2507,14 +2508,14 @@ class RigidEntity(KinematicEntity):
                     # translation
                     for i_d_ in qd.static(range(3)):
                         i_d = joints_info.dof_start[I_j] + i_d_
-                        i_d_jac = i_d + dof_offset - self._dof_start
+                        i_d_jac = i_d - self._dof_start
 
                         self._jacobian[i_d_, i_d_jac, i_b] = 1.0 * pos_mask[i_d_]
 
                     # rotation
                     for i_d_ in qd.static(range(3)):
                         i_d = joints_info.dof_start[I_j] + i_d_ + 3
-                        i_d_jac = i_d + dof_offset - self._dof_start
+                        i_d_jac = i_d - self._dof_start
                         I_d = [i_d, i_b] if qd.static(self.solver._options.batch_dofs_info) else i_d
                         rotation = dofs_info.motion_ang[I_d]
                         translation = rotation.cross(tgt_link_pos - links_state.pos[i_l, i_b])
@@ -2525,8 +2526,6 @@ class RigidEntity(KinematicEntity):
                         self._jacobian[3, i_d_jac, i_b] = rotation[0] * rot_mask[0]
                         self._jacobian[4, i_d_jac, i_b] = rotation[1] * rot_mask[1]
                         self._jacobian[5, i_d_jac, i_b] = rotation[2] * rot_mask[2]
-
-                dof_offset = dof_offset + joints_info.n_dofs[I_j]
 
             i_l = links_info.parent_idx[I_l]
 
