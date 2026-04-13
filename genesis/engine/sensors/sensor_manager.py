@@ -108,18 +108,23 @@ class SensorManager:
             cls_cache_start_idx = cache_size_per_dtype[dtype]
 
             update_ground_truth_only = True
+            any_history = False
             for sensor in sensors:
                 update_ground_truth_only &= sensor._options.update_ground_truth_only
                 sensor._cache_idx = cache_size_per_dtype[dtype]
                 cache_size_per_dtype[dtype] += sensor._cache_size
 
                 history_length = getattr(sensor._options, "history_length", 1)
+                if history_length > 1:
+                    any_history = True
                 # Interpolated delay reads buffered_data.at(delay_ts + 1), so the ring
                 # buffer must be at least delay_ts + 2 slots deep for those sensors.
                 needs_interp = getattr(sensor._options, "interpolate", False)
                 min_buf = sensor._delay_ts + (2 if needs_interp else 1)
                 max_buffer_len = max(max_buffer_len, min_buf, history_length)
-            self._should_update_cache_by_type[sensor_cls] = not update_ground_truth_only
+            # If any sensor uses history, the ring buffer must always be populated even
+            # when update_ground_truth_only=True, because _read_history() reads from it.
+            self._should_update_cache_by_type[sensor_cls] = not update_ground_truth_only or any_history
 
             cls_cache_end_idx = cache_size_per_dtype[dtype]
             self._cache_slices_by_type[sensor_cls] = slice(cls_cache_start_idx, cls_cache_end_idx)
