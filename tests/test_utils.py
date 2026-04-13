@@ -416,6 +416,46 @@ def test_animate_rgba_strips_alpha():
     assert len(frames) == n_frames
 
 
+@pytest.mark.required
+def test_animate_av_error_falls_back_to_moviepy(monkeypatch):
+    """When PyAV raises a non-ValueError (e.g. FFmpegError), animate() falls back to moviepy."""
+    pytest.importorskip("av", reason="PyAV not installed")
+
+    import av as av_mod
+    from unittest.mock import MagicMock, patch
+
+    # Make av.open raise a generic RuntimeError to simulate an av encode failure.
+    with patch.object(av_mod, "open", side_effect=RuntimeError("simulated av failure")):
+        moviepy_called = []
+
+        class FakeClip:
+            def write_videofile(self, *a, **kw):
+                moviepy_called.append(True)
+
+        with patch("genesis.utils.tools.ImageSequenceClip", return_value=FakeClip(), create=True):
+            # Also ensure the import inside animate() works without calling real moviepy
+            with patch.dict("sys.modules", {"moviepy": MagicMock()}):
+                import sys
+
+                sys.modules["moviepy"].ImageSequenceClip = lambda imgs, fps: FakeClip()
+                with tempfile.TemporaryDirectory() as tmp:
+                    animate(
+                        [np.full((8, 8, 3), 128, dtype=np.uint8)],
+                        filename=os.path.join(tmp, "out.mp4"),
+                    )
+    assert moviepy_called, "moviepy fallback was not triggered after av failure"
+
+
+@pytest.mark.required
+def test_animate_value_error_propagates_through_av_block():
+    """ValueError from input validation must propagate even if av is available."""
+    pytest.importorskip("av", reason="PyAV not installed")
+    imgs = [np.zeros((8, 8, 3), dtype=np.float32)]  # wrong dtype
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(ValueError, match="uint8"):
+            animate(imgs, filename=os.path.join(tmp, "out.mp4"))
+
+
 def test_fps_tracker():
     n_envs = 23
     tracker = FPSTracker(alpha=0.0, minimum_interval_seconds=0.1, n_envs=n_envs)

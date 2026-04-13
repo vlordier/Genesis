@@ -107,9 +107,11 @@ def animate(imgs, filename=None, fps=60):
 
         _av_ok = True
 
-    except ImportError as exc:
+    except Exception as exc:
+        if isinstance(exc, ValueError):
+            raise
         gs.logger.warning(
-            f"PyAV unavailable ({exc}); falling back to moviepy. "
+            f"PyAV unavailable or failed ({type(exc).__name__}: {exc}); falling back to moviepy. "
             "Note: moviepy ≥ 2.x may drop the last frame. Install 'av' for reliable output."
         )
 
