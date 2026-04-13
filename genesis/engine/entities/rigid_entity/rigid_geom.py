@@ -1118,7 +1118,20 @@ class RigidVisGeom(RBC):
     def enable_visualization(self):
         """
         Enable visualization for this geometry by making it active in all environments.
+
+        Warning
+        -------
+        This method currently only updates Python-side tracking attributes.
+        The rendering pipeline does not yet consume these flags for per-geom filtering;
+        the geometry will remain visible regardless of this call.
+
+        For entity-level visibility control, consider removing the entity from the scene
+        or adjusting its surface properties instead.
         """
+        gs.logger.warning(
+            "`enable_visualization()` is not yet integrated with the rendering pipeline. "
+            "Visibility will not be affected by this call."
+        )
         if self._solver.is_built:
             self.active_envs_mask = torch.ones(self._solver._B, dtype=torch.bool, device=gs.device)
             self.active_envs_idx = np.arange(self._solver._B)
@@ -1129,7 +1142,20 @@ class RigidVisGeom(RBC):
     def disable_visualization(self):
         """
         Disable visualization for this geometry by making it inactive in all environments.
+
+        Warning
+        -------
+        This method currently only updates Python-side tracking attributes.
+        The rendering pipeline does not yet consume these flags for per-geom filtering;
+        the geometry will remain visible regardless of this call.
+
+        For entity-level visibility control, consider removing the entity from the scene
+        or adjusting its surface properties instead.
         """
+        gs.logger.warning(
+            "`disable_visualization()` is not yet integrated with the rendering pipeline. "
+            "Visibility will not be affected by this call."
+        )
         if self._solver.is_built:
             self.active_envs_mask = torch.zeros(self._solver._B, dtype=torch.bool, device=gs.device)
             self.active_envs_idx = np.array([], dtype=np.int_)
