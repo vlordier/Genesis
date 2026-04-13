@@ -441,22 +441,16 @@ class KinematicSolver(Solver):
     # -------------------------------- simulation no-ops ----------------------------------
     # ------------------------------------------------------------------------------------
 
-    def substep(self, f):
+    def substep_pre_coupling(self, f):
         """
         Integrate velocity to position for kinematic entities.
-        
-        This is called every substep to update DOF positions based on velocities.
         """
-        # Only integrate for kinematic entities with velocity set
-        if self.is_active and self.n_envs > 0:
+        if self.is_active:
             kernel_integrate_dofs_velocity(
                 f,
                 self.dofs_state,
                 self._sim.dt / self._sim._substeps,
             )
-
-    def substep_pre_coupling(self, f):
-        pass
 
     def substep_pre_coupling_grad(self, f):
         pass

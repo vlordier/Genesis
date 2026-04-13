@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Type
+from typing import TYPE_CHECKING
 
 import quadrants as qd
 import numpy as np
@@ -190,73 +190,68 @@ class ContactForceSensor(
 
         self.debug_object: "Mesh" | None = None
 
-    @gs.assert_built
-    def read(self, envs_idx=None) -> torch.Tensor:
+    def _read_history(self, envs_idx) -> torch.Tensor:
         """
-        Read the sensor data (with noise applied if applicable).
-        """
-        envs_idx = self._sanitize_envs_idx(envs_idx)
-        history_length = self._options.history_length
+        Read ``history_length`` steps from the ground-truth ring buffer.
 
+        Returns shape ``(history_length, cache_size)`` (non-batched) or
+        ``(n_envs, history_length, cache_size)`` (batched), index 0 = most recent.
+
+        .. warning::
+            History slots that have not yet been written (i.e. when fewer simulation steps
+            have elapsed than ``history_length``) contain uninitialised memory from
+            ``torch.empty``.  Only slot index 0 (the most-recent step) is guaranteed to
+            be valid after the very first :meth:`~SensorManager.step` call.
+        """
         buffered_data = self._manager._buffered_data[gs.tc_float]
-        cache_slice = slice(self._cache_idx, self._cache_idx + 3)
-
-        if history_length == 1:
-            return self._get_formatted_data(self._manager.get_cloned_from_cache(self), envs_idx)
-
+        cache_slice = slice(self._cache_idx, self._cache_idx + self._cache_size)
         n_envs = self._manager._sim.n_envs
-        # Determine actual number of envs being queried
-        if envs_idx is None:
-            n_query_envs = n_envs if n_envs > 0 else 0
-        else:
-            n_query_envs = len(envs_idx)
+        n_query_envs = len(envs_idx)
+        history_length = self._options.history_length
 
         history_data = []
         for i in range(history_length):
             hist = buffered_data.at(i, envs_idx, cache_slice)
-            if n_envs == 0:
-                hist = hist.reshape(3)
-            else:
-                hist = hist.reshape(n_query_envs, 3)
+            hist = hist.reshape(self._cache_size) if n_envs == 0 else hist.reshape(n_query_envs, self._cache_size)
             history_data.append(hist)
 
-        result = torch.stack(history_data, dim=1)
-        return result.squeeze(1) if n_envs == 0 else result
+        stack_dim = 0 if n_envs == 0 else 1
+        return torch.stack(history_data, dim=stack_dim)
+
+    @gs.assert_built
+    def read(self, envs_idx=None) -> torch.Tensor:
+        """
+        Read the sensor data (with noise/delay/clipping applied when applicable).
+
+        When ``history_length == 1`` (default), returns the current processed force reading
+        shaped ``(3,)`` (non-batched) or ``(n_envs, 3)`` (batched).
+
+        When ``history_length > 1``, returns a ground-truth history buffer of shape
+        ``(history_length, 3)`` (non-batched) or ``(n_envs, history_length, 3)`` (batched),
+        where index 0 is the most recent step.
+        """
+        envs_idx = self._sanitize_envs_idx(envs_idx)
+        if self._options.history_length == 1:
+            return self._get_formatted_data(self._manager.get_cloned_from_cache(self), envs_idx)
+        return self._read_history(envs_idx)
 
     @gs.assert_built
     def read_ground_truth(self, envs_idx=None) -> torch.Tensor:
         """
-        Read the ground truth sensor data (without noise).
+        Read the ground-truth sensor data (without noise/delay/clipping).
+
+        When ``history_length == 1`` (default), returns the current ground-truth force
+        shaped ``(3,)`` (non-batched) or ``(n_envs, 3)`` (batched).
+
+        When ``history_length > 1``, returns a history buffer of shape
+        ``(history_length, 3)`` (non-batched) or ``(n_envs, history_length, 3)`` (batched),
+        where index 0 is the most recent step.
         """
         envs_idx = self._sanitize_envs_idx(envs_idx)
-        history_length = self._options.history_length
-
-        # Get ground truth from the ground truth cache (no noise/delay/quantization)
-        gt_cache = self._manager.get_cloned_from_cache(self, is_ground_truth=True)
-        cache_slice = slice(self._cache_idx, self._cache_idx + 3)
-
-        if history_length == 1:
+        if self._options.history_length == 1:
+            gt_cache = self._manager.get_cloned_from_cache(self, is_ground_truth=True)
             return self._get_formatted_data(gt_cache, envs_idx)
-
-        # For history, read from the buffered ground truth data
-        buffered_data = self._manager._buffered_data[gs.tc_float]
-        n_envs = self._manager._sim.n_envs
-        if envs_idx is None:
-            n_query_envs = n_envs if n_envs > 0 else 0
-        else:
-            n_query_envs = len(envs_idx)
-
-        history_data = []
-        for i in range(history_length):
-            hist = buffered_data.at(i, envs_idx, cache_slice)
-            if n_envs == 0:
-                hist = hist.reshape(3)
-            else:
-                hist = hist.reshape(n_query_envs, 3)
-            history_data.append(hist)
-
-        result = torch.stack(history_data, dim=1)
-        return result.squeeze(1) if n_envs == 0 else result
+        return self._read_history(envs_idx)
 
     def build(self):
         super().build()

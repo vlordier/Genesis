@@ -172,8 +172,6 @@ class RaycasterSharedMetadata(RigidSensorMetadataMixin, SharedSensorMetadata):
     patterns: list[RaycastPattern] = field(default_factory=list)
     ray_dirs: torch.Tensor = make_tensor_field((0, 3))
     ray_starts: torch.Tensor = make_tensor_field((0, 3))
-    ray_starts_world: torch.Tensor = make_tensor_field((0, 3))
-    ray_dirs_world: torch.Tensor = make_tensor_field((0, 3))
 
     points_to_sensor_idx: torch.Tensor = make_tensor_field((0,), dtype_factory=lambda: gs.tc_int)
     sensor_cache_offsets: torch.Tensor = make_tensor_field((0,), dtype_factory=lambda: gs.tc_int)
@@ -370,13 +368,10 @@ class RaycasterSensor(RigidSensorMixin, Sensor[RaycasterOptions, RaycasterShared
                 self.debug_objects.append(debug_sphere)
 
                 # Draw ray from sensor to hit point
-                if self._options.return_world_frame:
-                    ray_start = self.ray_starts_world[i].cpu().numpy()
-                else:
-                    ray_start = self.ray_starts[i].cpu().numpy()
-                    link_pos = self._link.get_pos(env_idx).reshape(3)
-                    link_quat = self._link.get_quat(env_idx).reshape(4)
-                    ray_start = transform_by_trans_quat(ray_start, link_pos, link_quat)
+                ray_start_local = self.ray_starts[i].cpu().numpy()
+                link_pos = self._link.get_pos(env_idx).reshape(3)
+                link_quat = self._link.get_quat(env_idx).reshape(4)
+                ray_start = transform_by_trans_quat(ray_start_local, link_pos, link_quat)
 
                 # Draw ray start sphere
                 debug_start = context.draw_debug_sphere(
