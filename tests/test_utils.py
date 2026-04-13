@@ -1,4 +1,6 @@
 import math
+import os
+import tempfile
 from functools import partial
 from unittest.mock import patch
 
@@ -10,7 +12,7 @@ from scipy.spatial.transform import Rotation as R, Slerp
 
 import genesis as gs
 import genesis.utils.geom as gu
-from genesis.utils.tools import FPSTracker
+from genesis.utils.tools import FPSTracker, animate
 from genesis.utils.misc import tensor_to_array
 from genesis.utils import warnings as warnings_mod
 from genesis.utils.warnings import warn_once
@@ -329,6 +331,89 @@ def test_geom_tensor_identity(batch_shape):
 
         np.testing.assert_allclose(np_args[0], np_args[-1], atol=1e2 * gs.EPS)
         np.testing.assert_allclose(tensor_to_array(tc_args[0]), tensor_to_array(tc_args[-1]), atol=1e2 * gs.EPS)
+
+
+@pytest.mark.required
+def test_animate_frame_count_rgb():
+    """animate() must encode every frame; no frame should be dropped."""
+    av = pytest.importorskip("av", reason="PyAV not installed")
+    if "libx264" not in av.codecs_available:
+        pytest.skip("PyAV build does not include libx264")
+
+    n_frames = 5
+    imgs = [np.full((8, 8, 3), i * 50, dtype=np.uint8) for i in range(n_frames)]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "out.mp4")
+        animate(imgs, filename=path, fps=30)
+        container = av.open(path)
+        frames = list(container.decode(video=0))
+        container.close()
+    assert len(frames) == n_frames, f"Expected {n_frames} frames, got {len(frames)}"
+
+
+@pytest.mark.required
+def test_animate_frame_count_grayscale():
+    """animate() must encode every grayscale frame without dropping any."""
+    av = pytest.importorskip("av", reason="PyAV not installed")
+    if "libx264" not in av.codecs_available:
+        pytest.skip("PyAV build does not include libx264")
+
+    n_frames = 4
+    imgs = [np.full((10, 10), i * 60, dtype=np.uint8) for i in range(n_frames)]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "gray.mp4")
+        animate(imgs, filename=path, fps=24)
+        container = av.open(path)
+        frames = list(container.decode(video=0))
+        container.close()
+    assert len(frames) == n_frames, f"Expected {n_frames} frames, got {len(frames)}"
+
+
+@pytest.mark.required
+def test_animate_rejects_float_input():
+    """animate() must raise ValueError for float images, not silently truncate."""
+    av = pytest.importorskip("av", reason="PyAV not installed")
+    if "libx264" not in av.codecs_available:
+        pytest.skip("PyAV build does not include libx264")
+
+    imgs = [np.zeros((8, 8, 3), dtype=np.float32)]
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(ValueError, match="uint8"):
+            animate(imgs, filename=os.path.join(tmp, "out.mp4"))
+
+
+@pytest.mark.required
+def test_animate_rejects_mismatched_frame_shape():
+    """animate() must raise ValueError when a later frame has a different shape."""
+    av = pytest.importorskip("av", reason="PyAV not installed")
+    if "libx264" not in av.codecs_available:
+        pytest.skip("PyAV build does not include libx264")
+
+    imgs = [
+        np.zeros((8, 8, 3), dtype=np.uint8),
+        np.zeros((16, 8, 3), dtype=np.uint8),  # different height
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(ValueError, match="shape"):
+            animate(imgs, filename=os.path.join(tmp, "out.mp4"))
+
+
+@pytest.mark.required
+def test_animate_rgba_strips_alpha():
+    """animate() must accept RGBA inputs and produce the correct frame count."""
+    av = pytest.importorskip("av", reason="PyAV not installed")
+    if "libx264" not in av.codecs_available:
+        pytest.skip("PyAV build does not include libx264")
+
+    n_frames = 3
+    imgs = [np.full((8, 8, 4), i * 80, dtype=np.uint8) for i in range(n_frames)]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "rgba.mp4")
+        animate(imgs, filename=path, fps=30)
+        container = av.open(path)
+        frames = list(container.decode(video=0))
+        container.close()
+    assert len(frames) == n_frames
 
 
 def test_fps_tracker():

@@ -15,7 +15,11 @@ def animate(imgs, filename=None, fps=60):
 
     Images must be uint8 arrays of shape ``(H, W, 3)`` (RGB), ``(H, W, 4)`` (RGBA,
     alpha stripped automatically), or ``(H, W)`` (grayscale). PIL Images are also
-    accepted. Float arrays are *not* supported; convert to uint8 before calling.
+    accepted. Float arrays are *not* supported; convert to uint8 before calling
+    (e.g. ``(img * 255).astype(np.uint8)``).
+
+    All frames must share the same height, width, and channel count as the first
+    frame; a ``ValueError`` is raised immediately if a mismatch is detected.
 
     Args:
         imgs (list): List of input images (numpy arrays or PIL Images).
@@ -49,9 +53,19 @@ def animate(imgs, filename=None, fps=60):
         first = imgs[0]
         if not isinstance(first, np.ndarray):
             first = np.array(first)
+        if not np.issubdtype(first.dtype, np.unsignedinteger) or first.dtype != np.uint8:
+            raise ValueError(
+                f"animate() requires uint8 images; got dtype={first.dtype}. "
+                "Convert float images with (img * 255).astype(np.uint8) before calling."
+            )
         # Strip alpha channel if present; libx264/yuv420p only accepts RGB or grayscale.
         if first.ndim == 3 and first.shape[2] == 4:
             first = first[..., :3]
+        if first.ndim not in (2, 3) or (first.ndim == 3 and first.shape[2] != 3):
+            raise ValueError(
+                f"animate() requires images of shape (H, W), (H, W, 3), or (H, W, 4); "
+                f"got shape={first.shape}."
+            )
         height, width = first.shape[:2]
         is_color = first.ndim == 3 and first.shape[2] == 3
         fmt = "rgb24" if is_color else "gray"
@@ -64,13 +78,22 @@ def animate(imgs, filename=None, fps=60):
             stream.pix_fmt = "yuv420p"
             stream.codec_context.options = {"preset": "ultrafast"}
 
-            for img in imgs:
+            for i, img in enumerate(imgs):
                 if not isinstance(img, np.ndarray):
                     img = np.array(img)
-                img = img.astype(np.uint8)
+                if img.dtype != np.uint8:
+                    raise ValueError(
+                        f"animate() requires uint8 images; frame {i} has dtype={img.dtype}."
+                    )
                 # Strip alpha channel for consistency with `first`.
                 if img.ndim == 3 and img.shape[2] == 4:
                     img = img[..., :3]
+                if img.shape[:2] != (height, width) or img.ndim != first.ndim:
+                    raise ValueError(
+                        f"Frame {i} shape {img.shape} does not match first frame shape "
+                        f"{first.shape} (after alpha strip). All frames must be identical in "
+                        "size and channel count."
+                    )
                 # from_ndarray handles stride/padding internally, avoiding the
                 # line_size // channels reshape bug for non-aligned widths.
                 frame = av.VideoFrame.from_ndarray(img, format=fmt)
