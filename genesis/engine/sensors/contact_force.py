@@ -183,7 +183,7 @@ class ContactForceSensor(
     def __init__(self, options: ContactForceSensorOptions, sensor_idx: int, sensor_manager: "SensorManager"):
         super().__init__(options, sensor_idx, sensor_manager)
 
-        self.debug_object: Mesh | None = None
+        self.debug_object: "Mesh | None" = None
 
     def _read_history(self, envs_idx: torch.Tensor) -> torch.Tensor:
         """
