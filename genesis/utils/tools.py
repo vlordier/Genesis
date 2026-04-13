@@ -29,17 +29,49 @@ def animate(imgs, filename=None, fps=60):
     os.makedirs(os.path.abspath(os.path.dirname(filename)), exist_ok=True)
 
     gs.logger.info(f'Saving video to ~<"{filename}">~...')
-    from moviepy import ImageSequenceClip
 
-    imgs = ImageSequenceClip(imgs, fps=fps)
-    imgs.write_videofile(
-        filename,
-        fps=fps,
-        logger=None,
-        codec="libx264",
-        preset="ultrafast",
-        # ffmpeg_params=["-crf", "0"],
-    )
+    try:
+        import av
+
+        first = imgs[0]
+        if not isinstance(first, np.ndarray):
+            first = np.array(first)
+        height, width = first.shape[:2]
+        is_color = first.ndim == 3 and first.shape[2] == 3
+
+        container = av.open(filename, mode="w")
+        stream = container.add_stream("libx264", rate=fps)
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+        stream.codec_context.options = {"preset": "ultrafast"}
+
+        fmt = "rgb24" if is_color else "gray8"
+        video_frame = av.VideoFrame(width, height, fmt)
+        frame_plane = video_frame.planes[0]
+        if is_color:
+            buf = np.asarray(memoryview(frame_plane)).reshape((-1, frame_plane.line_size // 3, 3))
+        else:
+            buf = np.asarray(memoryview(frame_plane)).reshape((-1, frame_plane.line_size))
+
+        for img in imgs:
+            if not isinstance(img, np.ndarray):
+                img = np.array(img)
+            img = img.astype(np.uint8)
+            buf[: img.shape[0], : img.shape[1]] = img
+            for packet in stream.encode(video_frame):
+                container.mux(packet)
+
+        for packet in stream.encode(None):
+            container.mux(packet)
+        container.close()
+
+    except ImportError:
+        from moviepy import ImageSequenceClip
+
+        clip = ImageSequenceClip(imgs, fps=fps)
+        clip.write_videofile(filename, fps=fps, logger=None, codec="libx264", preset="ultrafast")
+
     gs.logger.info("Video saved.")
 
 
