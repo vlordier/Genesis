@@ -405,6 +405,22 @@ def general_actuator():
     return mjcf
 
 
+@pytest.fixture(scope="session")
+def compound_joint():
+    mjcf = ET.Element("mujoco", model="compound_joint")
+    ET.SubElement(mjcf, "compiler", angle="radian")
+    ET.SubElement(mjcf, "option", gravity="0 0 0")
+    worldbody = ET.SubElement(mjcf, "worldbody")
+    seg1 = ET.SubElement(worldbody, "body", name="seg1", pos="0 0 0")
+    ET.SubElement(seg1, "joint", name="j_x", type="hinge", axis="1 0 0")
+    ET.SubElement(seg1, "joint", name="j_y", type="hinge", axis="0 1 0")
+    ET.SubElement(seg1, "geom", type="capsule", size="0.02", fromto="0 0 0 0 0 0.4")
+    seg2 = ET.SubElement(seg1, "body", name="seg2", pos="0 0 0.4")
+    ET.SubElement(seg2, "joint", name="j_z", type="hinge", axis="0 0 1")
+    ET.SubElement(seg2, "geom", type="capsule", size="0.02", fromto="0 0 0 0 0 0.4")
+    return mjcf
+
+
 @pytest.mark.required
 @pytest.mark.parametrize("model_name", ["box_plan"])
 @pytest.mark.parametrize("gs_solver", [gs.constraint_solver.CG, gs.constraint_solver.Newton])
@@ -2932,48 +2948,31 @@ def test_jacobian(gs_sim, tol):
 
 
 @pytest.mark.required
-def test_jacobian_compound_joints(tol):
-    """
-    Regression test for issue #1608: compound joints (multiple revolute joints on the same
-    body) produced wrong Jacobian columns because `dof_offset` was erroneously added to
-    `joints_info.dof_start`, which already encodes the global DOF position.
-
-    Before the fix, j_y (col 1) wrote to column 2 (1 + dof_offset=1 = 2) and j_z (col 2)
-    also wrote to column 2, making columns 1 and 2 identical. The test checks against the
-    known analytical Jacobian at q=[0,0,0] for a 3-DOF arm where seg1 has two compound
-    revolute joints (j_x, j_y) and seg2 has one (j_z).
-    """
+@pytest.mark.parametrize("model_name", ["compound_joint"])
+def test_jacobian_compound_joints(xml_path, tol):
     scene = gs.Scene(show_viewer=False)
     robot = scene.add_entity(
-        gs.morphs.MJCF(file="xml/compound_joint.xml", requires_jac_and_IK=True),
+        gs.morphs.MJCF(
+            file=xml_path,
+            requires_jac_and_IK=True,
+        ),
     )
     scene.build()
-
-    # Zero configuration: seg2 origin is at (0, 0, 0.4) in world frame.
-    # Analytical Jacobian:
-    #   j_x (col 0): rot=[1,0,0], r=[0,0,0.4] → J_pos = r×ω = [0,-0.4,0], J_rot=[1,0,0]
-    #   j_y (col 1): rot=[0,1,0], r=[0,0,0.4] → J_pos = r×ω = [0.4,0,0],  J_rot=[0,1,0]
-    #   j_z (col 2): at seg2 origin; r=[0,0,0] → J_pos = [0,0,0],           J_rot=[0,0,1]
-    qpos = np.zeros(robot.n_dofs, dtype=gs.np_float)
-    robot.set_qpos(qpos, zero_velocity=True)
-    scene.step()
-
     end_link = robot.get_link("seg2")
-    J = tensor_to_array(robot.get_jacobian(end_link))  # shape (6, 3)
 
-    L = 0.4  # seg1 length
-    expected = np.array(
-        [
-            [0.0, L, 0.0],   # pos x
-            [-L, 0.0, 0.0],  # pos y
-            [0.0, 0.0, 0.0], # pos z  (j_z at seg2 origin, no translation)
-            [1.0, 0.0, 0.0], # rot x
-            [0.0, 1.0, 0.0], # rot y
-            [0.0, 0.0, 1.0], # rot z
-        ],
-        dtype=gs.np_float,
-    )
-    assert_allclose(J, expected, tol=tol)
+    mj_model = mujoco.MjModel.from_xml_path(xml_path)
+    mj_data = mujoco.MjData(mj_model)
+    end_body_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, "seg2")
+    jacp = np.empty((3, mj_model.nv), dtype=np.float64)
+    jacr = np.empty((3, mj_model.nv), dtype=np.float64)
+
+    for qpos in (np.zeros(3), np.array([0.3, -0.5, 0.7])):
+        robot.set_qpos(qpos.astype(gs.np_float))
+        mj_data.qpos[:] = qpos
+        mujoco.mj_forward(mj_model, mj_data)
+        mujoco.mj_jacBody(mj_model, mj_data, jacp, jacr, end_body_id)
+
+        assert_allclose(robot.get_jacobian(end_link), np.concatenate([jacp, jacr]), tol=tol)
 
 
 @pytest.mark.required
