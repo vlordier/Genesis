@@ -929,6 +929,17 @@ class KinematicEntity(Entity):
         self._vgeoms = self.vgeoms
         self._is_built = True
 
+        # Build DOF name list: {joint_name}:dof_{idx} across all joints in order
+        dof_names = []
+        for joints_for_link in self._joints:
+            for joint in joints_for_link:
+                for i in range(joint.n_dofs):
+                    dof_names.append(f"{joint.name}:dof_{i}")
+        # Floating base: add 6 free-joint DOFs at the front
+        if any(joint.type == "FREE" for joints_for_link in self._joints for joint in joints_for_link):
+            dof_names = [f"free_joint:dof_{i}" for i in range(6)] + dof_names
+        self._dof_names = dof_names
+
         # The per-link inertia (and per heterogeneous variant) is now finalized, so anchor each aligned free root at
         # its fixed subtree center of mass and principal axes. Must run before the solver reads the link poses and
         # inertia. Defined here on the base class so kinematic and rigid entities anchor identically: a kinematic
@@ -2157,6 +2168,36 @@ class KinematicEntity(Entity):
         if self._is_built:
             return self._n_dofs
         return sum(joint.n_dofs for joint in self.joints)
+
+    @gs.assert_built
+    def get_dofs(self, envs_idx=None):
+        """Return DOF names for all joints of the entity.
+
+        Each DOF name is formatted as ``{joint_name}:dof_{index}``.
+        For floating-base entities the first 6 DOFs are labeled
+        ``free_joint:dof_0`` through ``free_joint:dof_5``.
+
+        Returns
+        -------
+        list[str]
+            List of DOF names in order matching DOF indices.
+        """
+        if envs_idx is None:
+            return self._dof_names
+        return self._dof_names
+
+    @gs.assert_built
+    def get_link_names(self, envs_idx=None):
+        """Return the names of all links in the entity.
+
+        Returns
+        -------
+        list[str]
+            List of link names in order matching link indices.
+        """
+        if envs_idx is None:
+            return [link.name for link in self._links]
+        return [link.name for link in self._links]
 
     @property
     def n_vgeoms(self):
