@@ -3265,7 +3265,7 @@ class RigidFloorVertContactHandler(RigidContactHandler):
                 self.contact_pairs[i_p].contact_pos = pos_v
                 sap_info[i_p].k = C
                 sap_info[i_p].phi0 = distance
-                sap_info[i_p].mu = geoms_info.coup_friction[i_g]
+                sap_info[i_p].mu = geoms_info.friction[i_g]
             else:
                 overflow = True
         return overflow
@@ -3415,7 +3415,7 @@ class RigidFloorTetContactHandler(RigidContactHandler):
                 pairs[i_p].contact_pos = centroid
                 sap_info[i_p].k = rigid_k
                 sap_info[i_p].phi0 = rigid_phi0
-                sap_info[i_p].mu = geoms_info.coup_friction[i_g]
+                sap_info[i_p].mu = geoms_info.friction[i_g]
             else:
                 overflow = True
 
