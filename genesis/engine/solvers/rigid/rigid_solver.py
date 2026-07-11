@@ -2755,7 +2755,7 @@ class RigidSolver(KinematicSolver):
             mask = (0, *indices_to_mask(dofs_idx)) if self.n_envs == 0 else indices_to_mask(envs_idx, dofs_idx)
             ctrl_mode = qd_to_torch(self.dofs_state.ctrl_mode, transpose=True, copy=False)
             ctrl_mode[mask] = gs.CTRL_MODE.FORCE
-            ctrl_force = qd_to_torch(self.dofs_state.ctrl_force, transpose=True, copy=False)
+            ctrl_force = qd_to_torch(self.dofs_state.ctrl_vel, transpose=True, copy=False)
             assign_indexed_tensor(ctrl_force, mask, force)
             if gs.backend == gs.metal:
                 torch.mps.synchronize()
